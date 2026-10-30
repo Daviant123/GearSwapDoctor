@@ -5,6 +5,8 @@ in the game's equipment grid (main / sub / range / ammo, head / neck / ears, bod
 feet), numbers in a fixed-width font.
 
 Tabs
+  Add features GearSwap features to add to a file (Doom gear, Obi, Treasure Hunter, DT key, movement speed ...), with
+               their options; suggested ones for the job and the gear owned; written into the file with a click
   Overview     each GearSwap file of the character: loads?, sets, problems, wsdist upgrades; Check now; wsdist version
   Problems     what's wrong (broken / misspelled / wrong slot / wrong job / not owned / in storage), filter by kind
   Upgrades     wsdist's better weapon skill sets, your set and the better one side by side in the equipment grid
@@ -30,11 +32,12 @@ sys.path.insert(0, HERE)
 import paths    # noqa: E402
 import checks   # noqa: E402
 import doctor   # noqa: E402
+import features  # noqa: E402
 import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = '2.3.0'
+VERSION = '2.4.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -141,6 +144,12 @@ GUIDE = """How to use GearSwap Doctor
    will change first. Every file is backed up before it's changed; "Undo last change" puts it back.
 
 4. In game, type //gs reload (or change job) to use the new sets.
+
+5. "Add features" adds things to a GearSwap file that it may not do yet: Doom gear that goes on by itself, the
+   Hachirin-no-Obi on the right day / weather, Treasure Hunter tagging, a DT key, movement speed gear when you run,
+   a Moonshade swap at high TP, Warp / experience ring commands, and more. ★ marks the ones suggested for that job
+   and your gear. Tick them, pick the options (your gear is in the lists), then "Add ticked features to this file".
+   Your own rules stay as they are: the features run after them. In game: //gs c gsd help.
 
 Words
   Set        a group of gear GearSwap puts on for something, e.g. sets.precast.WS["Savage Blade"]
@@ -322,6 +331,7 @@ class App(tk.Tk):
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
         self._start_tab()
+        self._features_tab()
         self._overview_tab()
         self._problems_tab()
         self._upgrades_tab()
@@ -546,6 +556,10 @@ class App(tk.Tk):
         self.job_missing = ttk.Label(nb_, text='', foreground='#666')
         self.job_missing.pack(side='left')
         ttk.Button(nb_, text='Show the list', command=lambda: self.show_problems('missing')).pack(side='left', padx=6)
+        s4 = section('4. Add features - Doom gear, Obi, Treasure Hunter, a DT key, movement speed and more')
+        self.job_feat = ttk.Label(s4, text='', wraplength=720, justify='left')
+        self.job_feat.pack(side='left', fill='x', expand=True)
+        ttk.Button(s4, text='Choose features...', command=lambda: self.open_features(self.cur_job)).pack(side='right', padx=6)
         self.cur_job = None
         self.job_ticks = set()          # keys of the ticked rows: ('r', path, old) / ('u', path, set)
         self.job_rowkey = {}            # tree row -> (key, edit)
@@ -648,6 +662,26 @@ class App(tk.Tk):
         self.job_missing.config(text=f"Not owned: {n_missing} item(s) named in these sets that you don't have - usually "
                                      "nothing to do." if n_missing else "Every item in these sets is one you own.")
         self._say(self.jt_up_text, 'Click an upgrade to see exactly what it swaps.' if n_up else '')
+        self.job_feat.config(text=self._job_feature_text(job, files))
+
+    def _job_feature_text(self, job, files):
+        if not files:
+            return ''
+        path = files[0]['path']
+        try:
+            src = open(path, encoding='utf-8', errors='replace').read()
+            have = features.read(path)
+            sug = features.suggest(job, src, [x['path'] for x in self.loaded_file(path).sets], self.feat_owned(job))
+        except Exception:
+            return 'Click "Choose features..." to see them.'
+        sug = {k: v for k, v in sug.items() if k not in have}
+        out = []
+        if have:
+            out.append('In ' + os.path.basename(path) + ': ' + ', '.join(features.BY_KEY[k]['title'] for k in have if k in features.BY_KEY) + '.')
+        if sug:
+            out.append('★ Suggested: ' + ', '.join(f"{features.BY_KEY[k]['title']} ({v})" for k, v in list(sug.items())[:4])
+                       + (f' and {len(sug) - 4} more' if len(sug) > 4 else '') + '.')
+        return '  '.join(out) or 'Nothing suggested - "Choose features..." shows them all.'
 
     def _job_tick(self, e):
         t = e.widget
@@ -850,6 +884,434 @@ class App(tk.Tk):
         w.geometry('820x560')
         t = tk.Text(w, wrap='word', font=('Segoe UI', 10), padx=12, pady=10)
         t.insert('1.0', GUIDE)
+        t.config(state='disabled')
+        t.pack(fill='both', expand=True)
+        ttk.Button(w, text='Close', command=w.destroy).pack(pady=6)
+
+    # ------------------------------------------------------------------ Add features
+    # His request 2026-10-30: "add a suggestion, that will let the user add relevant features or suggested features to
+    # the gearswap. make sure that it has a full suite of options. then this app should be able to implement them
+    # within the gearswap". Left: the features (★ suggested, with why); right: what it does and its options (his own
+    # gear in the lists); then "Add ticked features to this file" (features.py writes one block at the end of the file).
+    def _features_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.tab_feat = tab
+        self.nb.add(tab, text='★ Add features')
+        top = ttk.Frame(tab)
+        top.pack(fill='x')
+        ttk.Label(top, text='GearSwap file').pack(side='left')
+        self.feat_file = ttk.Combobox(top, state='readonly', width=34)
+        self.feat_file.pack(side='left', padx=6)
+        self.feat_file.bind('<<ComboboxSelected>>', lambda e: self.feat_load())
+        self.feat_style = ttk.Label(top, text='', foreground='#555')
+        self.feat_style.pack(side='left', padx=6)
+        b = ttk.Button(top, text='☑ Tick the suggested ones', command=self.feat_tick_suggested)
+        b.pack(side='right')
+        ToolTip(b, 'Ticks every feature marked ★ (suggested for this job and your gear). Nothing changes in the file yet.')
+        ttk.Label(tab, text='Click a feature to see what it does and set its options. Click its box (or press Space) to '
+                            'tick it. ★ = suggested for this job and your gear. Your own GearSwap rules stay as they are: '
+                            'the features run after them and add their gear on top.',
+                  foreground='#555', wraplength=1100, justify='left').pack(anchor='w', pady=(4, 6))
+        pw = ttk.PanedWindow(tab, orient='horizontal')
+        pw.pack(fill='both', expand=True)
+        left = ttk.Frame(pw)
+        t = ttk.Treeview(left, columns=('why', 'state'), show='tree headings', selectmode='browse')
+        t.heading('#0', text='Feature')
+        t.column('#0', width=250)
+        t.heading('why', text='Suggested because')
+        t.column('why', width=210)
+        t.heading('state', text='In this file')
+        t.column('state', width=100)
+        t.tag_configure('sug', foreground='#2e7d32')
+        t.tag_configure('group', font=('Segoe UI', 9, 'bold'))
+        sb = ttk.Scrollbar(left, orient='vertical', command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        t.bind('<Button-1>', self._feat_click)
+        t.bind('<space>', lambda e: self._feat_toggle(self.feat_cur))
+        t.bind('<<TreeviewSelect>>', lambda e: self.feat_show())
+        self.feat_tree = t
+        pw.add(left, weight=3)
+        right = ttk.Frame(pw, padding=(10, 0, 0, 0))
+        pw.add(right, weight=4)
+        def place(e, done=[]):                                # the list left, the options right (once, when shown)
+            if not done and e.width > 900:
+                done.append(1)
+                pw.sashpos(0, min(600, e.width - 540))
+        pw.bind('<Configure>', place)
+        self.feat_title = ttk.Label(right, text='', font=('Segoe UI', 12, 'bold'))
+        self.feat_title.pack(anchor='w')
+        self.feat_what = ttk.Label(right, text='', wraplength=500, justify='left')
+        self.feat_what.pack(anchor='w', pady=(2, 4))
+        self.feat_note = ttk.Label(right, text='', wraplength=500, justify='left', foreground='#b36b00')
+        self.feat_note.pack(anchor='w')
+        self.feat_opts = ttk.LabelFrame(right, text='Options', padding=8)
+        self.feat_opts.pack(fill='x', pady=6)
+        self.feat_cmds = ttk.Label(right, text='', justify='left', foreground='#2e5c8a', font=MONO, wraplength=500)
+        self.feat_cmds.pack(anchor='w')
+        bottom = ttk.Frame(tab)
+        bottom.pack(fill='x', pady=(6, 0))
+        b1 = ttk.Button(bottom, text='✔ Add ticked features to this file', style='Big.TButton', command=self.feat_apply)
+        b1.pack(side='left')
+        ToolTip(b1, 'Writes the ticked features into the GearSwap file (and takes out the ones you unticked). You see '
+                    'the list first; the file is backed up and checked before it is written.')
+        ttk.Button(bottom, text='Take them all out of this file', command=self.feat_remove).pack(side='left', padx=8)
+        ttk.Button(bottom, text='Show the code it adds', command=self.feat_code).pack(side='left')
+        self.feat_status = ttk.Label(bottom, text='', foreground='#555', wraplength=560, justify='left')
+        self.feat_status.pack(side='left', padx=10)
+        self.feat_conf, self.feat_paths, self.feat_sug, self.feat_src, self.feat_sets = {}, {}, {}, '', []
+        self.feat_have, self.feat_path, self.feat_cur, self.feat_job = set(), None, None, None
+        self._owned_cache = {}
+        self._feat_dirty = True
+        self.nb.bind('<<NotebookTabChanged>>', lambda e: self.feat_load() if self._feat_dirty and
+                     str(self.nb.select()) == str(self.tab_feat) else None, add='+')
+
+    def feat_owned(self, job, force=False):
+        """The gear this character owns that the job can wear (from the saved bags). Without force, nothing until the
+        item list is loaded (it loads in the background at start)."""
+        if self.items is None and not force:
+            return []
+        p = os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')
+        try:
+            stamp = os.path.getmtime(p)
+        except OSError:
+            return []
+        key = (self.who.get(), job, stamp)
+        if key not in self._owned_cache:
+            if self.items is None:
+                self.items = checks.Items()
+            try:
+                snap = json.load(open(p, encoding='utf-8'))
+            except (OSError, ValueError):
+                return []
+            self._owned_cache[key] = features.owned_items(self.items, snap.get('bags', {}), job)
+        return self._owned_cache[key]
+
+    def feat_fill_files(self):
+        files = doctor.files_for(self.who.get())
+        self.feat_paths = {os.path.basename(f): f for f in files}
+        names = list(self.feat_paths)
+        self.feat_file.configure(values=names)
+        if names and self.feat_file.get() not in names:
+            self.feat_file.set(names[0])
+        if not names:
+            self.feat_file.set('')
+        self._feat_dirty = True
+        if str(self.nb.select()) == str(self.tab_feat):
+            self.feat_load()
+
+    def open_features(self, job):
+        files = self._files_of(job)
+        if files and os.path.basename(files[0]['path']) in self.feat_paths:
+            self.feat_file.set(os.path.basename(files[0]['path']))
+            self._feat_dirty = True
+        self.nb.select(self.tab_feat)
+        if self._feat_dirty:
+            self.feat_load()
+
+    def feat_load(self):
+        self._feat_dirty = False
+        t = self.feat_tree
+        t.delete(*t.get_children())
+        name = self.feat_file.get()
+        path = self.feat_paths.get(name)
+        self.feat_path = path
+        if not path:
+            self.feat_style.config(text='No GearSwap files for this character.')
+            return
+        try:
+            self.feat_src = open(path, encoding='utf-8', errors='replace').read()
+        except OSError as e:
+            self.feat_style.config(text=str(e))
+            return
+        job = checks.job_of(name)
+        self.feat_job = job
+        self.feat_sets = [x['path'] for x in self.loaded_file(path).sets]
+        owned = self.feat_owned(job, force=True)
+        have = features.read(path)
+        self.feat_have = {k for k in have if k in features.BY_KEY}
+        self.feat_sug = features.suggest(job, self.feat_src, self.feat_sets, owned)
+        self.feat_conf = {}
+        for f in features.FEATURES:
+            d = features.defaults(f, owned, self.feat_sets)
+            if f['key'] in have and isinstance(have[f['key']], dict):
+                d.update(have[f['key']])
+                d['on'] = True
+            else:
+                d['on'] = False
+            self.feat_conf[f['key']] = d
+        sty = features.style_of(self.feat_src)
+        self.feat_style.config(text=f"{job or '?'} - " + {'Mote': "a Mote-style file (the features run after Mote's include)",
+                                                          'Selindrile': "a Selindrile-style file (the features run after "
+                                                                        "Sel-Include)"}.get(sty, 'its own rules (no include)')
+                               + ('' if owned else '  -  no saved bags yet: the gear lists are empty (Check now fills them)'))
+        for g in features.GROUPS:
+            gid = 'g:' + g
+            t.insert('', 'end', iid=gid, text=g, open=True, tags=('group',))
+            for f in features.FEATURES:
+                if f['group'] != g:
+                    continue
+                t.insert(gid, 'end', iid='f:' + f['key'], text=self._feat_text(f['key']),
+                         values=(self.feat_sug.get(f['key'], ''), self._feat_state(f['key'])),
+                         tags=('sug',) if f['key'] in self.feat_sug else ())
+        self.feat_status.config(text=('In this file now: ' + ', '.join(features.BY_KEY[k]['title'] for k in self.feat_have))
+                                if self.feat_have else 'No GearSwap Doctor features in this file yet.')
+        first = 'f:' + (self.feat_cur if self.feat_cur in features.BY_KEY else features.FEATURES[0]['key'])
+        t.selection_set(first)
+        t.see(first)
+        self.feat_show()
+
+    def _feat_text(self, key):
+        o = self.feat_conf.get(key, {})
+        return f"{ON if o.get('on') else OFF} {'★ ' if key in self.feat_sug else ''}{features.BY_KEY[key]['title']}"
+
+    def _feat_state(self, key):
+        if key in self.feat_have:
+            return '✔ added' + ('' if self.feat_conf.get(key, {}).get('on') else ' (untick = out)')
+        if features.already(features.BY_KEY[key], self.feat_src):
+            return '⚠ may have it'
+        return ''
+
+    def _feat_refresh_row(self, key):
+        iid = 'f:' + key
+        if self.feat_tree.exists(iid):
+            self.feat_tree.item(iid, text=self._feat_text(key), values=(self.feat_sug.get(key, ''), self._feat_state(key)))
+
+    def _feat_click(self, e):
+        row = self.feat_tree.identify_row(e.y)
+        if row.startswith('f:') and self.feat_tree.identify_column(e.x) == '#0' and e.x < 64:
+            self._feat_toggle(row[2:])
+
+    def _feat_toggle(self, key, value=None):
+        if key not in self.feat_conf:
+            return
+        o = self.feat_conf[key]
+        o['on'] = (not o.get('on')) if value is None else value
+        self._feat_refresh_row(key)
+
+    def _feat_set(self, key, opt, value):
+        self.feat_conf[key][opt] = value
+        if not self.feat_conf[key].get('on'):
+            self._feat_toggle(key, True)          # (changing an option ticks the feature)
+
+    def feat_tick_suggested(self):
+        for k in self.feat_sug:
+            if k in self.feat_conf:
+                self._feat_toggle(k, True)
+
+    def feat_show(self):
+        sel = self.feat_tree.selection()
+        if not sel or not sel[0].startswith('f:'):
+            return
+        key = sel[0][2:]
+        self.feat_cur = key
+        f = features.BY_KEY[key]
+        o = self.feat_conf[key]
+        owned = self.feat_owned(self.feat_job)
+        self.feat_title.config(text=f['title'])
+        self.feat_what.config(text=f['what'])
+        notes = []
+        if key in self.feat_sug:
+            notes.append('★ Suggested: ' + self.feat_sug[key] + '.')
+        jobs = f.get('jobs')
+        if jobs and self.feat_job and self.feat_job not in jobs:
+            notes.append(f'Usually not needed for {self.feat_job}.')
+        al = features.already(f, self.feat_src)
+        if al:
+            notes.append('⚠ ' + al + ' - adding this too may double up.')
+        if key == 'cancel' and not self._cancel_loaded():
+            notes.append("⚠ The Cancel addon isn't loaded at game start here (scripts\\init.txt): type //lua load cancel "
+                         "in game, or add the line lua load cancel to init.txt.")
+        self.feat_note.config(text='\n'.join(notes))
+        for w in self.feat_opts.winfo_children():
+            w.destroy()
+        box = self.feat_opts
+        row = 0
+        for k, typ, label, default, extra in f['opts']:
+            if typ == 'gear':
+                ttk.Label(box, text=label, font=('Segoe UI', 9, 'bold')).grid(row=row, column=0, columnspan=2, sticky='w', pady=(4, 0))
+                row += 1
+                gear = o.setdefault(k, {})
+                for slot in extra['slots']:
+                    vals = ['(none)'] + features.choices(owned, slot, features._catalog(f, slot))
+                    cur = gear.get(slot) or '(none)'
+                    if cur not in vals:
+                        vals.append(cur)
+                    ttk.Label(box, text='    ' + SLOT_TEXT.get(slot, slot)).grid(row=row, column=0, sticky='w')
+                    cb = ttk.Combobox(box, values=vals, state='readonly', width=30)
+                    cb.set(cur)
+                    cb.grid(row=row, column=1, sticky='w', pady=1)
+                    cb.bind('<<ComboboxSelected>>', lambda e, s_=slot, c=cb, k_=k: self._feat_gear(key, k_, s_, c.get()))
+                    row += 1
+                continue
+            ttk.Label(box, text=label, wraplength=210, justify='left').grid(row=row, column=0, sticky='w', pady=2)
+            cur = o.get(k, default)
+            if typ in ('set', 'item', 'choice', 'key'):
+                if typ == 'set':
+                    like = extra.get('like')
+                    import re as _re
+                    rx = _re.compile(like, _re.I) if like else None
+                    vals = ['(none)'] + sorted(self.feat_sets, key=lambda p_: (not (rx and rx.search(p_.replace('sets.', '', 1))),
+                                                                               p_.count('.'), p_))
+                elif typ == 'item':
+                    vals = ['(none)'] + features.choices(owned, extra['slot'], f.get('catalog', {}).get(extra.get('pick'), []))
+                elif typ == 'key':
+                    vals = features.KEYS
+                else:
+                    vals = extra['values']
+                cur = str(cur) if cur not in (None, '') else '(none)'
+                if cur not in vals:
+                    vals = vals + [cur]
+                cb = ttk.Combobox(box, values=vals, state='readonly', width=30)
+                cb.set(cur)
+                cb.grid(row=row, column=1, sticky='w')
+                cb.bind('<<ComboboxSelected>>', lambda e, k_=k, c=cb, t_=typ: self._feat_set(key, k_, '' if c.get() == '(none)'
+                                                                                             and t_ in ('set', 'item') else c.get()))
+                if typ == 'key':
+                    warn = ttk.Label(box, text=self._key_clash(key, cur), foreground='#b36b00')
+                    row += 1
+                    warn.grid(row=row, column=1, sticky='w')
+                    cb.bind('<<ComboboxSelected>>', lambda e, k_=k, c=cb, w_=warn: (self._feat_set(key, k_, c.get()),
+                                                                                    w_.config(text=self._key_clash(key, c.get()))), add='+')
+            elif typ == 'int':
+                var = tk.StringVar(value=str(cur))
+                sp = ttk.Spinbox(box, from_=extra['lo'], to=extra['hi'], increment=extra['step'], textvariable=var, width=8)
+                sp.grid(row=row, column=1, sticky='w')
+
+                def changed(*_a, k_=k, v_=var, lo=extra['lo'], hi=extra['hi']):
+                    try:
+                        n = int(float(v_.get()))
+                    except ValueError:
+                        return
+                    self._feat_set(key, k_, max(lo, min(hi, n)))
+                var.trace_add('write', changed)
+                sp._var = var
+            elif typ == 'bool':
+                var = tk.BooleanVar(value=bool(cur))
+                ttk.Checkbutton(box, variable=var, command=lambda k_=k, v_=var: self._feat_set(key, k_, bool(v_.get()))).grid(
+                    row=row, column=1, sticky='w')
+                box._keep = getattr(box, '_keep', []) + [var]
+            elif typ in ('text', 'items'):
+                var = tk.StringVar(value=', '.join(cur) if isinstance(cur, (list, tuple)) else str(cur or ''))
+                en = ttk.Entry(box, textvariable=var, width=36)
+                en.grid(row=row, column=1, columnspan=2, sticky='w')
+                var.trace_add('write', lambda *_a, k_=k, v_=var: self._feat_set(key, k_, v_.get()))
+                en._var = var
+                if typ == 'items':
+                    row += 1
+                    ttk.Label(box, text='(item names, separated by commas)', foreground='#777').grid(row=row, column=1, sticky='w')
+            row += 1
+        cmds = list(features.COMMANDS.get(key, []))
+        if cmds:
+            self.feat_cmds.config(text='In game:\n  ' + '\n  '.join(cmds) + '\n  //gs c gsd help')
+        else:
+            self.feat_cmds.config(text='Works by itself in game - nothing to type.')
+
+    def _feat_gear(self, key, opt, slot, value):
+        g = dict(self.feat_conf[key].get(opt) or {})
+        if value in ('', '(none)'):
+            g.pop(slot, None)
+        else:
+            g[slot] = value
+        self._feat_set(key, opt, g)
+
+    def _key_clash(self, key, label):
+        b = features.bind_key(label)
+        if not b:
+            return ''
+        for k, o in self.feat_conf.items():
+            if k != key and o.get('on') and features.bind_key(o.get('key', '')) == b:
+                return f"⚠ also used by {features.BY_KEY[k]['title']}"
+        import re as _re
+        if _re.search(r"bind\s+" + _re.escape(b) + r"\b", self.feat_src, _re.I):
+            return '⚠ your file binds this key already'
+        if features.style_of(self.feat_src) == 'Mote' and b in ('f9', 'f10', 'f11', 'f12', '^f9', '^f10', '^f11', '!f9', '!f10', '!f11', '!f12'):
+            return "⚠ Mote's include uses this key"
+        return ''
+
+    def _cancel_loaded(self):
+        try:
+            txt = open(os.path.join(checks.WINDOWER, 'scripts', 'init.txt'), encoding='utf-8', errors='replace').read()
+        except OSError:
+            return False
+        import re as _re
+        return bool(_re.search(r'^\s*lua\s+(load|l)\s+cancel\b', txt, _re.I | _re.M))
+
+    def _feat_ticked(self):
+        return {k: o for k, o in self.feat_conf.items() if o.get('on')}
+
+    def feat_apply(self):
+        path = self.feat_path
+        if not path:
+            return
+        on = self._feat_ticked()
+        if not on and not self.feat_have:
+            messagebox.showinfo('GearSwap Doctor', 'Tick at least one feature first (click its box).')
+            return
+        miss = features.missing(self.feat_conf)
+        conf = {k: dict(o) for k, o in self.feat_conf.items()}
+        if miss:
+            if not messagebox.askyesno('GearSwap Doctor', 'These have no gear / set picked yet, so they would do nothing:\n\n  '
+                                       + '\n  '.join(miss) + '\n\nAdd the others without them?'):
+                return
+            for k, o in conf.items():
+                if features.BY_KEY[k]['title'] in miss:
+                    o['on'] = False
+        add = [features.BY_KEY[k]['title'] for k, o in conf.items() if o.get('on')]
+        out = [features.BY_KEY[k]['title'] for k in self.feat_have if not conf.get(k, {}).get('on')]
+        msg = os.path.basename(path) + ':\n'
+        if add:
+            msg += '\nAdd / keep:\n  - ' + '\n  - '.join(add) + '\n'
+        if out:
+            msg += '\nTake out:\n  - ' + '\n  - '.join(out) + '\n'
+        msg += ('\nThe file is backed up first and checked before it is written. Your own rules stay as they are.\n\n'
+                'In game, on that character: //gs reload  -  then //gs c gsd help for the commands.')
+        if not messagebox.askyesno('GearSwap Doctor - add features', msg):
+            return
+        try:
+            bk, names = features.apply(path, conf)
+        except (fixer.EditError, OSError) as e:
+            messagebox.showerror('GearSwap Doctor', f'Nothing was changed: {e}')
+            return
+        self.loaded.pop(path, None)
+        self.feat_load()
+        if bk is None:
+            self.feat_status.config(text='Nothing to change - the file already has exactly these.')
+            return
+        self.fill_backups()
+        self.feat_status.config(text=('Done: ' + ', '.join(names) if names else 'Done: the features were taken out')
+                                + f'. Backup: {os.path.basename(os.path.dirname(bk))}. In game: //gs reload')
+        messagebox.showinfo('GearSwap Doctor', ('Added to ' + os.path.basename(path) + ':\n  - ' + '\n  - '.join(names)
+                                                if names else 'The features were taken out of ' + os.path.basename(path))
+                            + '\n\nIn game, on that character: //gs reload\nThen //gs c gsd help shows the commands.')
+
+    def feat_remove(self):
+        if not self.feat_path or not self.feat_have:
+            messagebox.showinfo('GearSwap Doctor', 'This file has no GearSwap Doctor features.')
+            return
+        if not messagebox.askyesno('GearSwap Doctor', 'Take every GearSwap Doctor feature out of ' + os.path.basename(self.feat_path)
+                                   + '? The file is backed up first; your own rules are not touched.'):
+            return
+        try:
+            bk, _ = features.remove(self.feat_path)
+        except (fixer.EditError, OSError) as e:
+            messagebox.showerror('GearSwap Doctor', f'Nothing was changed: {e}')
+            return
+        self.loaded.pop(self.feat_path, None)
+        self.feat_load()
+        self.fill_backups()
+        self.feat_status.config(text='Taken out. In game: //gs reload')
+
+    def feat_code(self):
+        w = tk.Toplevel(self)
+        w.title('The code GearSwap Doctor adds')
+        w.geometry('860x560')
+        t = tk.Text(w, wrap='none', font=MONO, padx=8, pady=8)
+        on = self._feat_ticked()
+        t.insert('1.0', (features.render(on) if on else '-- (nothing ticked)\n') + '\n-- It goes at the very end of '
+                 + os.path.basename(self.feat_path or 'the file') + '.\n-- The shared code, gsd-features.lua, is put next to '
+                 'it (GearSwap\'s data folder) - one copy for all your files.')
         t.config(state='disabled')
         t.pack(fill='both', expand=True)
         ttk.Button(w, text='Close', command=w.destroy).pack(pady=6)
@@ -1465,6 +1927,7 @@ class App(tk.Tk):
         if names:
             self.sim_file_changed()
         self.fill_jobs()
+        self.feat_fill_files()
         self.fill_overview()
         self.fill_problems()
         self.fill_upgrades()
@@ -1793,6 +2256,14 @@ def selftest(out_path):
                 out['checkup'] = {'sets': f['sets'], 'problems': len(f['problems']), 'upgrades': len(f['upgrades']),
                                   'tp_sets': [(u['ws'], u.get('now'), u.get('best')) for u in f['upgrades'] if u.get('kind') == 'tp'],
                                   'errors': [u['error'] for u in f['upgrades'] if 'error' in u][:3]}
+                break
+        # the features (Add features): every one of them on a real file, in the stand-in GearSwap
+        conf = {f['key']: dict(features.defaults(f, [], []), on=True) for f in features.FEATURES}
+        for who in chars:
+            fs = doctor.files_for(who)
+            if fs:
+                out['features'] = {'count': len(features.FEATURES), 'file_sets': len(gs_loader.load(fs[0]).sets),
+                                   'errors': features.simulate(fs[0], conf)[:3]}
                 break
         out['ok'] = True
     except Exception as e:

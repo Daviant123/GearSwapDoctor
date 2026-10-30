@@ -1,4 +1,4 @@
-# GearSwap Doctor 2.3.0
+# GearSwap Doctor 2.4.0
 
 A free tool for Final Fantasy XI players who use **Windower 4 + GearSwap**. It checks your GearSwap files, fixes what
 can be fixed, and finds better weapon skill sets **from the gear you own**, using **wsdist** (Kastra's FFXI damage
@@ -13,6 +13,7 @@ nothing to install. Windows may say "Windows protected your PC" the first time (
 | Tab | |
 |---|---|
 | **Jobs** | click a job (or All jobs): its misspelled names, upgrades from your own gear and the things to look at, each ticked or not - **Do everything for that job** at once, or one part at a time (Fix ticked names / Apply ticked upgrades). All jobs: the to-do list, most important first |
+| **Add features** | adds things your GearSwap may not do yet, with all their options and your own gear in the lists: Doom / Curse gear, sleep gear, Echo Drops when silenced, cancel shadows / Sneak / Stoneskin before a recast, movement speed gear when you run, refresh gear at low MP, a DT key, a DT set at low HP, reraise gear, weapon lock, Treasure Hunter (Tag / Always), Hachirin-no-Obi / Orpheus's Sash, Moonshade swap at high TP, Warp / Dim. / experience ring commands, low ammo warning, a small window with the modes. ★ = suggested for that job and your gear. One click writes them into the file (backed up and checked first); your own rules stay as they are. In game: `//gs c gsd help` |
 | **Overview** | every GearSwap file of a character: loads?, sets, problems, wsdist upgrades, best gain |
 | **Problems** | files that don't load, sets used but never made, misspelled item names (fixable with a click), items in the wrong slot / for the wrong job, items you don't own or left in storage |
 | **Upgrades (wsdist)** | better weapon skill sets **and TP (engaged) sets** from your own gear: your set and the better one side by side, swaps in green. TP sets are judged by time to a weapon skill (or damage per round) and keep the damage taken they have now |
