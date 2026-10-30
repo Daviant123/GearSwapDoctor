@@ -1,4 +1,4 @@
-# GearSwap Doctor 2.0.0
+# GearSwap Doctor 2.1.0
 
 A free tool for Final Fantasy XI players who use **Windower 4 + GearSwap**. It checks your GearSwap files, fixes what
 can be fixed, and finds better weapon skill sets **from the gear you own**, using **wsdist** (Kastra's FFXI damage
@@ -12,6 +12,7 @@ nothing to install. Windows may say "Windows protected your PC" the first time (
 
 | Tab | |
 |---|---|
+| **Start here** | what to do, most important first, in plain words: what doesn't work in game, misspelled names (Fix all), the best upgrades (Look / Apply this), gear left in storage - each with a button for the next step; pick one job to focus on |
 | **Overview** | every GearSwap file of a character: loads?, sets, problems, wsdist upgrades, best gain |
 | **Problems** | files that don't load, sets used but never made, misspelled item names (fixable with a click), items in the wrong slot / for the wrong job, items you don't own or left in storage |
 | **Upgrades (wsdist)** | better weapon skill sets from your own gear: your set and the better one side by side, swaps in green |

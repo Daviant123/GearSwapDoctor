@@ -60,9 +60,20 @@ REPO = 'IzaKastra/wsdist_beta'
 SKIP = ('.exe', '.png', '.ico', '.spec')
 
 
+def _ssl_context():
+    """The trusted certificates to check GitHub with: certifi's list (packed into the exe) - the exe's own Python
+    couldn't check GitHub's certificate on some PCs ("unable to get issuer certificate", found 2026-10-30)."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def _get(url, timeout=20):
     req = urllib.request.Request(url, headers={'User-Agent': 'GearSwap-Doctor'})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
         return r.read()
 
 

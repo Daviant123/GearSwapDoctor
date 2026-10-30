@@ -34,7 +34,7 @@ import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = '2.0.0'
+VERSION = '2.1.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -50,6 +50,92 @@ SLOT_TEXT = {'main': 'Main', 'sub': 'Sub', 'range': 'Range', 'ammo': 'Ammo', 'he
 JOBS = ['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU',
         'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN']
 OFF, ON = '☐', '☑'
+
+# How much each kind matters, and what it means / what to do, in plain words (his request 2026-10-30: "gearswap doctor
+# gui is not very user friendly and hard to understand. add in more things to help the user make decisions")
+KIND_LEVEL = {'broken': 'must', 'unknown': 'must', 'slot': 'should', 'job': 'should', 'stored': 'should', 'missing': 'info'}
+LEVEL_TEXT = {'must': 'Must fix', 'should': 'Should fix', 'info': 'Just so you know'}
+LEVEL_COLOR = {'must': '#d9534f', 'should': '#e0a030', 'info': '#9a9a9a', 'good': '#4caf50'}
+LEVEL_RANK = {'must': 0, 'should': 1, 'info': 2}
+KIND_HELP = {
+    'broken': ("This set or file doesn't work. GearSwap stops reading the file there, or the set is used before it's made, "
+               "so the gear in it is never worn.",
+               "Open the file at the line shown in Details (or ask for help with it). This one can't be fixed with a click."),
+    'unknown': ("The item name isn't a real item - a typo or an old name. GearSwap skips it, so that slot stays empty when "
+                "the set is used.",
+                "Tick it and click Apply ticked: the name is changed to the closest real item shown as the fix."),
+    'slot': ("The item can't go in that slot (for example a ring in an earring slot). GearSwap can't equip it there.",
+             "Move it to the right slot in the file, or take it out of the set."),
+    'job': ("This job can't wear the item, so GearSwap can't equip it in this job's sets.",
+            "Take it out of this job's file, or use an item this job can wear."),
+    'stored': ("You own it, but it's in storage (Mog Safe, Locker, Satchel, Sack, Case...). GearSwap only equips gear from "
+               "the inventory and the Mog Wardrobes.",
+               "Move it into a Mog Wardrobe (Steward's Store does it for you, or by hand at the Mog House)."),
+    'missing': ("This character doesn't have the item anywhere.",
+                "Usually nothing to do: sets copied from a guide often name gear you don't have. Only matters if you "
+                "plan to get it - until then GearSwap just skips that slot."),
+}
+
+
+class ToolTip:
+    """A small yellow tip when the mouse rests on a widget."""
+    def __init__(self, widget, text):
+        self.widget, self.text, self.tip = widget, text, None
+        widget.bind('<Enter>', self.show)
+        widget.bind('<Leave>', self.hide)
+
+    def show(self, _=None):
+        if self.tip:
+            return
+        x, y = self.widget.winfo_rootx() + 10, self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f'+{x}+{y}')
+        tk.Label(self.tip, text=self.text, background='#ffffe0', relief='solid', borderwidth=1, wraplength=380,
+                 justify='left', font=('Segoe UI', 9)).pack(ipadx=4, ipady=2)
+
+    def hide(self, _=None):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
+BIG_GAIN_NOTE = "Gains this big usually mean the set you have now names gear you don't own, so wsdist counts those slots as empty - check the swaps before applying."
+
+
+def verdict(gain):
+    """How worth it an upgrade is, in words."""
+    if gain >= 15:
+        return 'Big gain'
+    if gain >= 5:
+        return 'Good gain'
+    return 'Small gain'
+
+GUIDE = """How to use GearSwap Doctor
+
+1. Pick the character at the top and click Check now. It reads every GearSwap file of that character, checks every
+   set, and asks wsdist (Kastra's damage simulator) for better weapon skill sets made from gear you already own.
+
+2. Open "Start here". It lists what to do, most important first:
+     red     Must fix - something doesn't work in game (a file that doesn't load, a misspelled item name)
+     orange  Should fix - gear GearSwap can't equip (wrong slot, wrong job, left in storage)
+     green   An upgrade - more damage from gear you already have
+     grey    Just so you know - nothing to do unless you want to
+   Each line has a button for the next step.
+
+3. Nothing in your files changes until you click Apply (or "Fix all" / "Apply this"). You see a list of exactly what
+   will change first. Every file is backed up before it's changed; "Undo last change" puts it back.
+
+4. In game, type //gs reload (or change job) to use the new sets.
+
+Words
+  Set        a group of gear GearSwap puts on for something, e.g. sets.precast.WS["Savage Blade"]
+  Slot       where an item goes: main, sub, range, ammo, head, neck, ears, body, hands, rings, back, waist, legs, feet
+  Wardrobe   the Mog Wardrobes 1-8: GearSwap equips from them and the inventory, nothing else
+  Upgrade    a set wsdist found that does more damage, using only gear this character owns
+  wsdist     Kastra's FFXI damage simulator - its numbers are estimates for comparing sets (1500 TP on an Apex Toad,
+             no buffs, unless changed in Settings), not exact in-game damage
+"""
 MONO = ('Courier New', 10)
 
 
@@ -213,8 +299,14 @@ class App(tk.Tk):
         self.status = ttk.Label(top, text='')
         self.status.pack(side='left', padx=6)
 
+        help_btn = ttk.Button(top, text='?  How to use', command=self.show_guide)
+        help_btn.pack(side='right')
+        ToolTip(self.check_btn, 'Reads all of this character\'s GearSwap files again, checks every set and looks for '
+                                'better weapon skill sets with wsdist. Changes nothing.')
+
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
+        self._start_tab()
         self._overview_tab()
         self._problems_tab()
         self._upgrades_tab()
@@ -226,8 +318,13 @@ class App(tk.Tk):
 
         bottom = ttk.Frame(self, padding=(8, 0, 8, 8))
         bottom.pack(fill='x')
-        ttk.Button(bottom, text='Apply ticked', style='Big.TButton', command=self.apply).pack(side='left')
-        ttk.Button(bottom, text='Undo last change', command=self.undo).pack(side='left', padx=8)
+        b_apply = ttk.Button(bottom, text='Apply ticked', style='Big.TButton', command=self.apply)
+        b_apply.pack(side='left')
+        ToolTip(b_apply, 'Changes the GearSwap files for every ticked row (misspelled names, upgrades). You see the full '
+                         'list first; each file is backed up.')
+        b_undo = ttk.Button(bottom, text='Undo last change', command=self.undo)
+        b_undo.pack(side='left', padx=8)
+        ToolTip(b_undo, 'Puts back the files from the last change (from the backup made then).')
         self.tick_label = ttk.Label(bottom, text='')
         self.tick_label.pack(side='left', padx=8)
         ttk.Label(bottom, text='Damage = wsdist estimates (good for comparing sets, not exact in-game numbers).',
@@ -311,6 +408,171 @@ class App(tk.Tk):
         box.insert('1.0', text)
         box.config(state='disabled')
 
+    # ------------------------------------------------------------------ Start here
+    def _start_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.tab_start = tab
+        self.nb.add(tab, text='★ Start here')
+        head = ttk.Frame(tab)
+        head.pack(fill='x')
+        self.start_head = ttk.Label(head, text='', font=('Segoe UI', 12, 'bold'))
+        self.start_head.pack(side='left')
+        self.start_job = ttk.Combobox(head, values=['All jobs'], state='readonly', width=12)
+        self.start_job.set('All jobs')
+        self.start_job.pack(side='right')
+        self.start_job.bind('<<ComboboxSelected>>', lambda e: self.fill_start())
+        ttk.Label(head, text='Jobs:').pack(side='right', padx=4)
+        ToolTip(self.start_job, 'Show only the files for one job - e.g. the job you play the most.')
+        self.start_sub = ttk.Label(tab, text='', foreground='#555', wraplength=1100, justify='left')
+        self.start_sub.pack(anchor='w', pady=(2, 8))
+        outer = ttk.Frame(tab)
+        outer.pack(fill='both', expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0, background='#f4f4f4')
+        sb = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        self.start_cards = tk.Frame(canvas, background='#f4f4f4')
+        self.start_cards.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        win = canvas.create_window((0, 0), window=self.start_cards, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(win, width=e.width))
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-e.delta / 120), 'units')
+                        if str(self.nb.select()) == str(self.tab_start) else None)
+
+    def _card(self, level, title, text, buttons=()):
+        """One line of the to-do list: a coloured bar, what it is, why, and buttons for the next step."""
+        row = tk.Frame(self.start_cards, background='#ffffff', bd=1, relief='solid', highlightthickness=0)
+        row.pack(fill='x', padx=2, pady=4)
+        tk.Frame(row, background=LEVEL_COLOR.get(level, '#999'), width=8).pack(side='left', fill='y')
+        body = tk.Frame(row, background='#ffffff')
+        body.pack(side='left', fill='both', expand=True, padx=10, pady=8)
+        tag = {'must': 'MUST FIX', 'should': 'SHOULD FIX', 'info': 'JUST SO YOU KNOW', 'good': 'UPGRADE'}.get(level, '')
+        tk.Label(body, text=tag, background='#ffffff', foreground=LEVEL_COLOR.get(level, '#999'),
+                 font=('Segoe UI', 8, 'bold')).pack(anchor='w')
+        tk.Label(body, text=title, background='#ffffff', font=('Segoe UI', 11, 'bold'), anchor='w', justify='left',
+                 wraplength=820).pack(anchor='w')
+        if text:
+            tk.Label(body, text=text, background='#ffffff', foreground='#444', anchor='w', justify='left',
+                     wraplength=820).pack(anchor='w', pady=(2, 0))
+        bar = tk.Frame(row, background='#ffffff')
+        bar.pack(side='right', padx=10)
+        for label, cmd in buttons:
+            ttk.Button(bar, text=label, command=cmd).pack(side='left', padx=3)
+
+    def fill_start(self):
+        for w in self.start_cards.winfo_children():
+            w.destroy()
+        r, who = self.report, self.who.get()
+        if not r:
+            self.start_head.config(text=f'{who}: not checked yet')
+            self.start_sub.config(text='Click Check now (top left). It takes a minute or two and changes nothing - then this page '
+                                       'tells you what to do, most important first.')
+            self._card('info', 'Step 1: click Check now', 'GearSwap Doctor reads every GearSwap file of this character, '
+                       'checks every set against the gear you own, and asks wsdist for better weapon skill sets.',
+                       [('Check now', self.run_check)])
+            return
+        jobs = sorted({f.get('job') for f in r['files'] if f.get('job')})
+        self.start_job.configure(values=['All jobs'] + jobs)
+        pick = self.start_job.get()
+        files = [f for f in r['files'] if pick == 'All jobs' or f.get('job') == pick]
+        r = dict(r, files=files)
+        probs = [(f, p) for f in r['files'] for p in f['problems']]
+        by = {}
+        for f, p in probs:
+            by.setdefault(p['kind'], []).append((f, p))
+        ups = sorted(((f, u) for f in r['files'] for u in f['upgrades'] if 'error' not in u), key=lambda x: -x[1]['gain'])
+        must = len(by.get('broken', [])) + len(by.get('unknown', []))
+        self.start_head.config(text=f'{who}: ' + ('everything works' if not must else f'{must} thing(s) to fix first'))
+        self.start_sub.config(text=f"Checked {ago(r['time'])}. {len(r['files'])} GearSwap files. Most important first; each line "
+                                   "has a button for the next step. Nothing is changed until you click Apply / Fix.")
+        # bags out of date
+        bt = r.get('bags_time')
+        if not bt:
+            self._card('should', "Your bags aren't known", "GearSwap Doctor reads what you own from the findAll addon (or "
+                       "Steward). Without it, it can't tell what you own or find upgrades. In game: //lua load findall, then "
+                       "log in on this character.", [])
+        elif time.time() - bt > 3 * 86400:
+            self._card('info', f'Your bags were saved {ago(bt)}', 'Log in on this character (findAll / Steward save the '
+                       'bags) and click Check now, so the list matches what you have today.', [('Check now', self.run_check)])
+        # 1. broken
+        if by.get('broken'):
+            files = sorted({f['file'] for f, p in by['broken']})
+            self._card('must', f"{len(by['broken'])} set(s) or file(s) don't work in game", KIND_HELP['broken'][0] + ' In: '
+                       + ', '.join(files[:6]) + (' ...' if len(files) > 6 else ''), [('Show me', lambda: self.show_problems('broken'))])
+        # 2. misspelled
+        fixable = [(f, p) for f, p in by.get('unknown', []) if p.get('fix')]
+        if by.get('unknown'):
+            ex = ', '.join(f"{p['item']} -> {p['fix']}" for f, p in fixable[:3])
+            self._card('must', f"{len(by['unknown'])} item name(s) are misspelled", KIND_HELP['unknown'][0]
+                       + (f' For example: {ex}.' if ex else ''),
+                       ([(f'Fix all {len(fixable)}', self.fix_all_misspelled)] if fixable else []) + [('Show me', lambda: self.show_problems('unknown'))])
+        # 3. upgrades
+        for f, u in ups[:3]:
+            n = len(u['changes'])
+            self._card('good', f"{u['ws']}: {verdict(u['gain']).lower()} (+{u['gain']}% damage) in {f['file']}",
+                       f"wsdist found a better set from gear you already own: {n} item(s) change "
+                       f"({', '.join(list(u['changes'].values())[:4])}{' ...' if n > 4 else ''}). Average damage {u['now']} -> {u['best']}."
+                       + (' ' + BIG_GAIN_NOTE if u['gain'] > 100 else ''),
+                       [('Look', lambda f=f, u=u: self.show_upgrade_for(f['path'], u['set'])),
+                        ('Apply this', lambda f=f, u=u: self._apply({f['path']: [('slots', u['set'], u['changes'])]}))])
+        if len(ups) > 3:
+            self._card('good', f'{len(ups) - 3} more upgrade(s)', 'Smaller ones, or for weapon skills you may use less. '
+                       'The Upgrades tab lists them all with how big each gain is.', [('Open Upgrades', lambda: self.nb.select(self.tab_upgrades))])
+        # 4. should fix
+        for kind, title in (('stored', "item(s) are in storage, so GearSwap can't use them"), ('slot', 'item(s) are in the wrong slot'),
+                            ('job', "item(s) can't be worn by this job")):
+            if by.get(kind):
+                names = sorted({p['item'] for f, p in by[kind]})
+                self._card('should', f"{len(by[kind])} {title}", KIND_HELP[kind][0] + ' ' + KIND_HELP[kind][1]
+                           + ' Items: ' + ', '.join(names[:6]) + (' ...' if len(names) > 6 else ''),
+                           [('Show me', lambda k=kind: self.show_problems(k))])
+        # 5. just so you know
+        if by.get('missing'):
+            self._card('info', f"{len(by['missing'])} item(s) named in your sets that you don't own", KIND_HELP['missing'][1],
+                       [('Show the list', lambda: self.show_problems('missing'))])
+        if not probs and not ups:
+            self._card('good', 'All good', 'Every set loads, every item is real and wearable, and wsdist found nothing better '
+                       'among the gear you own.', [])
+
+    def show_problems(self, kind=None):
+        """Problems tab showing only that kind (Start here's "Show me")."""
+        for k, v in self.kind_on.items():
+            v.set(kind is None or k == kind)
+        self.only_fix.set(False)
+        self.fill_problems()
+        for fid in self.prob.get_children():
+            self.prob.item(fid, open=True)
+        self.nb.select(self.tab_problems)
+
+    def fix_all_misspelled(self):
+        """Tick every misspelled name that has a fix, then the usual confirm list."""
+        self.show_problems('unknown')
+        by_file = {}
+        for row, (path, edit) in self.rows.items():
+            if edit[0] == 'rename':
+                by_file.setdefault(path, []).append(edit)
+        if by_file:
+            self._apply(by_file)
+
+    def show_upgrade_for(self, path, set_path):
+        self.nb.select(self.tab_upgrades)
+        for row, (pth, edit) in self.rows.items():
+            if edit[0] == 'slots' and pth == path and edit[1] == set_path:
+                self.upg.see(row)
+                self.upg.selection_set(row)
+                self.show_upgrade()
+                break
+
+    def show_guide(self):
+        w = tk.Toplevel(self)
+        w.title('How to use GearSwap Doctor')
+        w.geometry('820x560')
+        t = tk.Text(w, wrap='word', font=('Segoe UI', 10), padx=12, pady=10)
+        t.insert('1.0', GUIDE)
+        t.config(state='disabled')
+        t.pack(fill='both', expand=True)
+        ttk.Button(w, text='Close', command=w.destroy).pack(pady=6)
+
     # ------------------------------------------------------------------ Overview
     def _overview_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
@@ -337,40 +599,54 @@ class App(tk.Tk):
         if not sel:
             return
         path = self.files_tree.item(sel[0], 'tags')[0] if self.files_tree.item(sel[0], 'tags') else None
-        self.nb.select(3)
+        self.nb.select(self.tab_sets)
         if path:
             self.fill_sets(focus=path)
 
     # ------------------------------------------------------------------ Problems
     def _problems_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
+        self.tab_problems = tab
         self.nb.add(tab, text='Problems')
         bar = ttk.Frame(tab)
         bar.pack(fill='x', pady=(0, 6))
+        self.only_fix = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text='Only what I can fix with a click', variable=self.only_fix, command=self.fill_problems).pack(side='left', padx=(0, 16))
         ttk.Label(bar, text='Show').pack(side='left')
         self.kind_on = {}
+        self.kind_box = {}
         for k, label in KIND_TEXT.items():
-            v = tk.BooleanVar(value=True)
+            v = tk.BooleanVar(value=(k != 'missing'))        # (Not owned is mostly noise: off until asked for)
             self.kind_on[k] = v
-            ttk.Checkbutton(bar, text=label, variable=v, command=self.fill_problems).pack(side='left', padx=4)
-        frame, self.prob = self._tree(tab, ('kind', 'item', 'slot', 'detail', 'sets'),
-                                      ('What', 'Item / set', 'Slot', 'Details', 'Sets'), (100, 220, 60, 470, 50))
+            cbx = ttk.Checkbutton(bar, text=label, variable=v, command=self.fill_problems)
+            cbx.pack(side='left', padx=4)
+            self.kind_box[k] = cbx
+        ToolTip(self.kind_box['missing'], 'Gear named in your sets that this character does not have. Usually nothing to do, so '
+                                          'it is hidden at first - tick it to see the list.')
+        frame, self.prob = self._tree(tab, ('level', 'kind', 'item', 'slot', 'detail', 'sets'),
+                                      ('Importance', 'What', 'Item / set', 'Slot', 'Details', 'Sets'), (100, 90, 210, 55, 400, 45))
+        for lv, col in LEVEL_COLOR.items():
+            self.prob.tag_configure(lv, foreground=col if lv != 'info' else '#666')
         frame.pack(fill='both', expand=True)
         self.prob.bind('<Button-1>', self._click_tick)
         self.prob.bind('<<TreeviewSelect>>', lambda e: self._show_info(self.prob, self.prob_text))
-        self.prob_text = self._textbox(tab, 4)
+        self.prob_text = self._textbox(tab, 6)
         self.prob_text.pack(fill='x', pady=(6, 0))
-        ttk.Label(tab, text='Tick a Misspelled row (click its box) to fix the name; the others are for you to look at.',
-                  foreground='#666').pack(anchor='w')
+        ttk.Label(tab, text='Click a row: what it means and what to do show here. Misspelled names have a box - tick it and click '
+                            'Apply ticked to fix them.', foreground='#666').pack(anchor='w')
 
     # ------------------------------------------------------------------ Upgrades
     def _upgrades_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
+        self.tab_upgrades = tab
         self.nb.add(tab, text='Upgrades (wsdist)')
         pw = ttk.PanedWindow(tab, orient='horizontal')
         pw.pack(fill='both', expand=True)
         left = ttk.Frame(pw)
-        frame, self.upg = self._tree(left, ('gain', 'dmg'), ('Gain', 'Damage now -> best'), (70, 150), tree_width=230)
+        frame, self.upg = self._tree(left, ('gain', 'verdict', 'swaps', 'dmg'), ('Gain', 'Worth it?', 'Items', 'Damage now -> best'),
+                                     (60, 80, 45, 120), tree_width=200)
+        self.upg.tag_configure('big', foreground='#2e7d32')
+        self.upg.tag_configure('small', foreground='#777')
         frame.pack(fill='both', expand=True)
         self.upg.bind('<Button-1>', self._click_tick)
         self.upg.bind('<<TreeviewSelect>>', lambda e: self.show_upgrade())
@@ -384,7 +660,7 @@ class App(tk.Tk):
         self.grid_now.pack(fill='x', pady=(0, 4))
         self.grid_best = GearGrid(grids, "wsdist's best from your gear", lambda: self.items)
         self.grid_best.pack(fill='x')
-        self.upg_text = self._textbox(right, 4)
+        self.upg_text = self._textbox(right, 9)
         self.upg_text.pack(fill='x', pady=(6, 0))
         ttk.Label(right, text='Green = a swap. Tick the weapon skill on the left, then Apply ticked.', foreground='#666').pack(anchor='w')
         pw.add(right, weight=3)
@@ -404,11 +680,40 @@ class App(tk.Tk):
         self.upg_head.config(text=f"{u['ws']:<22} now {u['now']:>6}   best {u['best']:>6}   +{u['gain']}%")
         self.grid_now.show(now, {s: '#fbe3c4' for s in u['changes']})
         self.grid_best.show(best, marks)
-        self._say(self.upg_text, f"{os.path.basename(path)}  -  {u['set']}\n" + '\n'.join(u.get('notes') or []))
+        where = self.item_bags()
+        lines = [f"{verdict(u['gain'])}: +{u['gain']}% average damage for {u['ws']} ({u['now']} -> {u['best']}), "
+                 f"{len(u['changes'])} item(s) change - all gear this character already owns.", '', 'The swaps:']
+        for slot, new in u['changes'].items():
+            old = now.get(slot) or '(empty)'
+            bag = where.get(new.lower())
+            lines.append(f"  {SLOT_TEXT.get(slot, slot):<7} {old}  ->  {new}" + (f"   (it's in your {bag})" if bag else ''))
+        if u['gain'] < 5:
+            lines.append('')
+            lines.append('A small gain: worth it only if you use this weapon skill a lot.')
+        if u['gain'] > 100:
+            lines.append('')
+            lines.append(BIG_GAIN_NOTE)
+        lines += ['', f"{os.path.basename(path)}  -  {u['set']}"] + list(u.get('notes') or [])
+        self._say(self.upg_text, '\n'.join(lines))
+
+    def item_bags(self):
+        """{item name (lower): 'Mog Wardrobe 2' ...} from the saved bags."""
+        try:
+            snap = json.load(open(os.path.join(doctor.DATA, f'bags_{self.who.get()}.json'), encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        nice = {'inventory': 'inventory', 'wardrobe': 'Mog Wardrobe'}
+        out = {}
+        for bag, content in snap.get('bags', {}).items():
+            label = nice.get(bag) or (('Mog Wardrobe ' + bag[8:]) if bag.startswith('wardrobe') else bag)
+            for n in content:
+                out.setdefault(n.lower(), label)
+        return out
 
     # ------------------------------------------------------------------ Sets
     def _sets_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
+        self.tab_sets = tab
         self.nb.add(tab, text='Sets')
         pw = ttk.PanedWindow(tab, orient='horizontal')
         pw.pack(fill='both', expand=True)
@@ -505,7 +810,7 @@ class App(tk.Tk):
         if not getattr(self, 'sel_set', None):
             return
         path, set_path = self.sel_set
-        self.nb.select(4)
+        self.nb.select(self.tab_sim)
         self.sim_file.set(os.path.basename(path))
         self.sim_file_changed()
         self.sim_set.set(set_path)
@@ -521,6 +826,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------ Simulate
     def _simulate_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
+        self.tab_sim = tab
         self.nb.add(tab, text='Simulate')
         inp = ttk.LabelFrame(tab, text='Inputs', padding=8)
         inp.pack(fill='x')
@@ -860,6 +1166,7 @@ class App(tk.Tk):
             self.sim_file.set(names[0])
         if names:
             self.sim_file_changed()
+        self.fill_start()
         self.fill_overview()
         self.fill_problems()
         self.fill_upgrades()
@@ -904,8 +1211,17 @@ class App(tk.Tk):
         r = self.report
         if not r:
             return
+        counts = {}
+        for f in r['files']:
+            for p in f['problems']:
+                counts[p['kind']] = counts.get(p['kind'], 0) + 1
+        for k, cbx in self.kind_box.items():
+            cbx.config(text=f"{KIND_TEXT[k]} ({counts.get(k, 0)})")
         for f in r['files']:
             probs = [p for p in f['problems'] if self.kind_on[p['kind']].get()] if f['problems'] else []
+            if self.only_fix.get():
+                probs = [p for p in probs if p['kind'] == 'unknown' and p.get('fix')]
+            probs.sort(key=lambda p: (LEVEL_RANK[KIND_LEVEL.get(p['kind'], 'info')], p['kind'], p['item']))
             if not probs:
                 continue
             fid = t.insert('', 'end', iid=self._iid('p'), text=f"{f['file']}  ({len(probs)})", open=any(p['kind'] in ('broken', 'unknown') for p in probs))
@@ -913,14 +1229,18 @@ class App(tk.Tk):
                 fix = p.get('fix')
                 fixable = p['kind'] == 'unknown' and fix
                 detail = p['detail'] + (f'   [fix: {fix}]' if fixable else '')
+                lv = KIND_LEVEL.get(p['kind'], 'info')
                 row = t.insert(fid, 'end', iid=self._iid('p'), text=(OFF + ' ' if fixable else '   ') + KIND_TEXT.get(p['kind'], p['kind']),
-                               values=(KIND_TEXT.get(p['kind'], p['kind']), p['item'], p['slot'], detail, len(p['sets'])))
+                               values=(LEVEL_TEXT[lv], KIND_TEXT.get(p['kind'], p['kind']), p['item'], p['slot'], detail, len(p['sets'])),
+                               tags=(lv,))
                 if fixable:
                     self.rows[row] = (f['path'], ('rename', p['item'], fix))
                 where = ', '.join(x for x in p['sets'] if x)
-                self.info[row] = (f"{KIND_TEXT.get(p['kind'], p['kind'])}: {p['item']} {p['detail']}"
+                means, todo = KIND_HELP.get(p['kind'], ('', ''))
+                self.info[row] = (f"{LEVEL_TEXT[lv]} - {KIND_TEXT.get(p['kind'], p['kind'])}: {p['item']} {p['detail']}"
                                   + (('\nIn: ' + where) if where else '')
-                                  + (f'\nTick it and click Apply ticked to change it to {fix}.' if fixable else ''))
+                                  + f'\nWhat it means: {means}\nWhat to do: {todo}'
+                                  + (f' (the fix: {fix})' if fixable else ''))
         self._update_tick_label()
 
     def fill_upgrades(self):
@@ -939,12 +1259,15 @@ class App(tk.Tk):
                 continue
             good = [u for u in ups if 'error' not in u]
             fid = t.insert('', 'end', iid=self._iid('u'), text=f"{f['file']}  ({len(good)})", open=bool(good))
+            ups = sorted(ups, key=lambda u: -(u.get('gain') or -1))           # (the biggest gains first)
             for u in ups:
                 if 'error' in u:
-                    row = t.insert(fid, 'end', iid=self._iid('u'), text='   ' + u['ws'], values=('-', '-'))
+                    row = t.insert(fid, 'end', iid=self._iid('u'), text='   ' + u['ws'], values=('-', 'not checked', '', '-'), tags=('small',))
                     self.info[row] = u['error']
                     continue
-                row = t.insert(fid, 'end', iid=self._iid('u'), text=OFF + ' ' + u['ws'], values=(f"+{u['gain']}%", f"{u['now']} -> {u['best']}"))
+                row = t.insert(fid, 'end', iid=self._iid('u'), text=OFF + ' ' + u['ws'],
+                               values=(f"+{u['gain']}%", verdict(u['gain']), len(u['changes']), f"{u['now']} -> {u['best']}"),
+                               tags=('big' if u['gain'] >= 15 else 'small' if u['gain'] < 5 else '',))
                 self.rows[row] = (f['path'], ('slots', u['set'], u['changes']))
                 self.info[('u', row)] = u
 
@@ -1037,7 +1360,7 @@ class App(tk.Tk):
             lines.append(os.path.basename(path) + ':')
             for e in edits:
                 lines.append(f'   {e[1]} -> {e[2]}' if e[0] == 'rename' else f'   {e[1]}: ' + ', '.join(f'{k} {v}' for k, v in e[2].items()))
-        if not messagebox.askyesno('GearSwap Doctor', 'Change these GearSwap files? (each is backed up first)\n\n' + '\n'.join(lines)):
+        if not self.confirm_changes(by_file):
             return
         out = []
         for path, edits in by_file.items():
@@ -1049,6 +1372,45 @@ class App(tk.Tk):
         messagebox.showinfo('GearSwap Doctor', '\n'.join(out) + '\n\nIn game: //gs reload (or change job) to use the new sets.')
         self.loaded.clear()
         self.run_check(quiet=True)
+
+    def confirm_changes(self, by_file):
+        """A clear list of exactly what will change, before anything is written. True = go ahead."""
+        w = tk.Toplevel(self)
+        w.title('Change these GearSwap files?')
+        w.geometry('900x480')
+        w.transient(self)
+        n = sum(len(e[2]) if e[0] == 'slots' else 1 for edits in by_file.values() for e in edits)
+        ttk.Label(w, text=f'{n} change(s) in {len(by_file)} file(s):', font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
+        frame = ttk.Frame(w)
+        frame.pack(fill='both', expand=True, padx=10)
+        t = ttk.Treeview(frame, columns=('set', 'slot', 'now', 'new'), show='tree headings')
+        for c, h, wd in (('#0', 'File', 190), ('set', 'Set / name', 250), ('slot', 'Slot', 60), ('now', 'Now', 170), ('new', 'Becomes', 190)):
+            t.heading(c, text=h)
+            t.column(c, width=wd, anchor='w')
+        sb = ttk.Scrollbar(frame, orient='vertical', command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        for path, edits in by_file.items():
+            for e in edits:
+                if e[0] == 'rename':
+                    t.insert('', 'end', text=os.path.basename(path), values=('misspelled name (every set)', '', e[1], e[2]))
+                else:
+                    cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
+                    for slot, new in e[2].items():
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[1], slot, cur.get(slot, ''), new))
+        ttk.Label(w, text='Each file is backed up first ("Undo last change" puts it back). A change that would stop a file from '
+                          'loading is refused. In game: //gs reload afterwards.', foreground='#555', wraplength=860).pack(anchor='w', padx=10, pady=6)
+        res = {'ok': False}
+        bar = ttk.Frame(w)
+        bar.pack(pady=(0, 10))
+        ttk.Button(bar, text=f'Change {n}', style='Big.TButton', command=lambda: (res.update(ok=True), w.destroy())).pack(side='left', padx=6)
+        ttk.Button(bar, text='Cancel', command=w.destroy).pack(side='left', padx=6)
+        if getattr(self, 'auto_confirm', None) is not None:          # (the tests answer for the user)
+            w.after(50, lambda: (res.update(ok=self.auto_confirm), w.destroy()))
+        w.grab_set()
+        self.wait_window(w)
+        return res['ok']
 
     def undo(self):
         folders = sorted(f for f in glob.glob(os.path.join(self._backups(), '*')) if not f.endswith('_undone'))
