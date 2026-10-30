@@ -1,4 +1,4 @@
-# GearSwap Doctor 2.2.0
+# GearSwap Doctor 2.3.0
 
 A free tool for Final Fantasy XI players who use **Windower 4 + GearSwap**. It checks your GearSwap files, fixes what
 can be fixed, and finds better weapon skill sets **from the gear you own**, using **wsdist** (Kastra's FFXI damage
@@ -15,12 +15,12 @@ nothing to install. Windows may say "Windows protected your PC" the first time (
 | **Jobs** | click a job (or All jobs): its misspelled names, upgrades from your own gear and the things to look at, each ticked or not - **Do everything for that job** at once, or one part at a time (Fix ticked names / Apply ticked upgrades). All jobs: the to-do list, most important first |
 | **Overview** | every GearSwap file of a character: loads?, sets, problems, wsdist upgrades, best gain |
 | **Problems** | files that don't load, sets used but never made, misspelled item names (fixable with a click), items in the wrong slot / for the wrong job, items you don't own or left in storage |
-| **Upgrades (wsdist)** | better weapon skill sets from your own gear: your set and the better one side by side, swaps in green |
+| **Upgrades (wsdist)** | better weapon skill sets **and TP (engaged) sets** from your own gear: your set and the better one side by side, swaps in green. TP sets are judged by time to a weapon skill (or damage per round) and keep the damage taken they have now |
 | **Sets** | every set in every file in the game's equipment grid, problems marked |
 | **Simulate** | wsdist on one weapon skill set: its damage, or the best set from your gear (sub job, enemy, TP) |
 | **My gear** | what the character owns, by bag, with a search |
 | **Backups** | every change is backed up first; put any backup back |
-| **Settings** | TP / enemy for the check-ups, sub job per job, the daily check, folders |
+| **Settings** | TP / enemy for the check-ups, TP sets on/off and how they're judged, sub job per job, the daily check, folders |
 
 Nothing in your GearSwap files changes until you click **Apply**. Every change is backed up first, and a change that
 would stop the file loading is refused. In game, `//gs reload` to use the new sets.

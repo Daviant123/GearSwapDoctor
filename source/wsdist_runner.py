@@ -121,6 +121,58 @@ def _enemy(enemy_name):
     return enemy
 
 
+TP_METRICS = {'time': 'Time to WS', 'damage': 'Damage dealt'}
+
+
+def _tp_value(out, metric):
+    """What to show for a TP set: seconds to the weapon skill, or damage per attack round."""
+    return out[0] if metric == 'time' else out[1][0]
+
+
+def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20):
+    """The best TP (engaged) set from the owned gear (wsdist's "attack round" - Melee TP set). metric 'time': the
+    seconds of auto-attacks from 0 TP to ws_tp (lower is better); 'damage': damage per attack round. Returns (best
+    {slot: entry}, best value, current value)."""
+    mods = _wsdist()
+    cp, ws_mod, act = mods['create_player'], mods['wsdist'], mods['actions']
+    enemy = _enemy(enemy_name)
+    empty = mods['gear'].Empty
+    start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
+    check = {slot: list(owned.get(slot, [])) for slot in SLOT_MAP.values()}
+    for slot in check:
+        seen, uniq = set(), []
+        for x in check[slot]:
+            if x['Name2'] not in seen:
+                seen.add(x['Name2']); uniq.append(x)
+        check[slot] = uniq
+        if start[slot] is not empty and all(x['Name2'] != start[slot]['Name2'] for x in check[slot]):
+            check[slot].append(start[slot])
+        if not check[slot]:
+            check[slot] = [start[slot]]
+    abilities = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': 0, 'Storm spell': 'None', 'Enhancing Skill': 0,
+                 'Verbose Swaps': False}
+    m = TP_METRICS.get(metric, 'Time to WS')
+    cwd = os.getcwd()
+    os.chdir(WS_DIR)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+            now = act.average_attack_round(player0, enemy, 0, ws_tp, m)
+            # keep the set's damage taken: a TP.DT set made "faster" by dropping its DT gear would be no use - the new
+            # set must have at least the physical / magic DT the set has now (wsdist's PDT / MDT requirement)
+            st = player0.stats
+            pdt = max(-50, st.get('PDT', 0) + st.get('DT', 0)) + st.get('PDT2', 0) + st.get('DT2', 0)
+            mdt = max(-50, st.get('MDT', 0) + st.get('DT', 0)) + st.get('MDT2', 0) + st.get('DT2', 0)
+            req_p, req_m = min(0, pdt), min(0, mdt)
+            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, {}, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
+                                       check, dict(start), req_p, req_m, m, False, 0)
+            after = act.average_attack_round(best, enemy, 0, ws_tp, m)
+    finally:
+        os.chdir(cwd)
+    best_tp_set.kept_dt = (req_p, req_m)
+    return best.gearset, _tp_value(after, metric), _tp_value(now, metric)
+
+
 def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20):
     """The average damage of one weapon skill with this set (wsdist's Quicklook), or raises."""
     mods = _wsdist()
@@ -225,12 +277,12 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
             locked.add(slot)
             notes.append(f"{g['name']} ({gs}) isn't in wsdist: kept as it is")
     # the weapon: the set's own, else the first weapon set with the right kind of weapon for this weapon skill
-    skill = ws_skill(ws)
+    skill = ws_skill(ws) if ws else None                 # (a TP set: any weapon from the weapon sets)
     if 'main' not in current:
         for wname, wg in weapon_sets:
             main = wg.get('main')
             ents = main and entries_for(main['name'], items, index)
-            if ents and pick_variant(ents).get('Skill Type') == skill:
+            if ents and (ws is None or pick_variant(ents).get('Skill Type') == skill):
                 current['main'] = pick_variant(ents)
                 subg = wg.get('sub')
                 se = subg and entries_for(subg['name'], items, index)

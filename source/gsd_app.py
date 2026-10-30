@@ -34,7 +34,7 @@ import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = '2.2.0'
+VERSION = '2.3.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -101,6 +101,20 @@ class ToolTip:
 
 
 BIG_GAIN_NOTE = "Gains this big usually mean the set you have now names gear you don't own, so wsdist counts those slots as empty - check the swaps before applying."
+
+
+def nowbest(u):
+    """'928 -> 1219', or for a TP set '15.99 s -> 13.36 s to a WS'."""
+    if u.get('kind') == 'tp' and u.get('unit') == 's':
+        return f"{u['now']} s -> {u['best']} s to a WS"
+    return f"{u['now']} -> {u['best']}"
+
+
+def gain_words(u):
+    """What the gain is: 'average damage for Savage Blade' / 'faster to a weapon skill (TP set engaged.Acc)'."""
+    if u.get('kind') == 'tp':
+        return ('faster to a weapon skill' if u.get('unit') == 's' else 'more damage per attack round') + f" with {u['ws'][4:]}"
+    return f"average damage for {u['ws']}"
 
 
 def verdict(gain):
@@ -172,7 +186,8 @@ def gs_slot(key):
 
 
 def load_settings():
-    d = {'tp': 1500, 'enemy': 'Apex Toad', 'subs': {}, 'daily': True, 'character': None}
+    d = {'tp': 1500, 'enemy': 'Apex Toad', 'subs': {}, 'daily': True, 'character': None, 'tp_sets': True, 'ws_tp': 1000,
+         'tp_metric': 'time'}
     try:
         d.update(json.load(open(SETTINGS, encoding='utf-8')))
     except (OSError, ValueError):
@@ -497,11 +512,11 @@ class App(tk.Tk):
         b1.pack(side='right', padx=6)
         ttk.Button(b1, text='Fix ticked names', command=lambda: self.do_job_part(self.cur_job, 'fix')).pack()
 
-        s2 = section('2. Upgrades - better weapon skill sets from gear you already own (wsdist)')
+        s2 = section('2. Upgrades - better weapon skill sets and TP sets from gear you already own (wsdist)')
         self.jt_up = ttk.Treeview(s2, columns=('gain', 'worth', 'items', 'dmg'), show='tree headings', height=6)
-        self.jt_up.heading('#0', text='Weapon skill')
+        self.jt_up.heading('#0', text='Weapon skill / TP set')
         self.jt_up.column('#0', width=220)
-        for c, h, w in (('gain', 'Gain', 70), ('worth', 'Worth it?', 90), ('items', 'Items', 50), ('dmg', 'Damage now -> best', 140)):
+        for c, h, w in (('gain', 'Gain', 70), ('worth', 'Worth it?', 90), ('items', 'Items', 50), ('dmg', 'Now -> best', 170)):
             self.jt_up.heading(c, text=h)
             self.jt_up.column(c, width=w, anchor='w')
         self.jt_up.tag_configure('big', foreground='#2e7d32')
@@ -620,7 +635,7 @@ class App(tk.Tk):
                 key = ('u', f['path'], u['set'])
                 row = self.jt_up.insert('', 'end', text=f"{self._box(key)} {u['ws']}",
                                         values=(f"+{u['gain']}%", verdict(u['gain']) + (' ⚑' if u['gain'] > 100 else ''),
-                                                len(u['changes']), f"{u['now']} -> {u['best']}"),
+                                                len(u['changes']), nowbest(u)),
                                         tags=('big' if u['gain'] >= 15 else 'small' if u['gain'] < 5 else '',))
                 self.job_rowkey[('up', row)] = (key, (f['path'], ('slots', u['set'], u['changes'])), u)
                 n_up += 1
@@ -657,7 +672,7 @@ class App(tk.Tk):
         key, (path, edit), u = rec
         now = self.set_gear(path, u['set'])
         where = self.item_bags()
-        lines = [f"{verdict(u['gain'])}: +{u['gain']}% average damage for {u['ws']} ({u['now']} -> {u['best']})  -  "
+        lines = [f"{verdict(u['gain'])}: +{u['gain']}% {gain_words(u)} ({nowbest(u)})  -  "
                  f"{os.path.basename(path)}, {u['set']}"]
         for slot, new in u['changes'].items():
             bag = where.get(new.lower())
@@ -772,9 +787,9 @@ class App(tk.Tk):
         # 3. upgrades
         for f, u in ups[:3]:
             n = len(u['changes'])
-            self._card('good', f"{u['ws']}: {verdict(u['gain']).lower()} (+{u['gain']}% damage) in {f['file']}",
+            self._card('good', f"{u['ws']}: {verdict(u['gain']).lower()} (+{u['gain']}% {'faster to a weapon skill' if u.get('kind') == 'tp' else 'damage'}) in {f['file']}",
                        f"wsdist found a better set from gear you already own: {n} item(s) change "
-                       f"({', '.join(list(u['changes'].values())[:4])}{' ...' if n > 4 else ''}). Average damage {u['now']} -> {u['best']}."
+                       f"({', '.join(list(u['changes'].values())[:4])}{' ...' if n > 4 else ''}). {'Time to a weapon skill' if u.get('kind') == 'tp' else 'Average damage'}: {nowbest(u)}."
                        + (' ' + BIG_GAIN_NOTE if u['gain'] > 100 else ''),
                        [('Look', lambda f=f, u=u: self.show_upgrade_for(f['path'], u['set'])),
                         ('Apply this', lambda f=f, u=u: self._apply({f['path']: [('slots', u['set'], u['changes'])]}))])
@@ -909,7 +924,7 @@ class App(tk.Tk):
         pw = ttk.PanedWindow(tab, orient='horizontal')
         pw.pack(fill='both', expand=True)
         left = ttk.Frame(pw)
-        frame, self.upg = self._tree(left, ('gain', 'verdict', 'swaps', 'dmg'), ('Gain', 'Worth it?', 'Items', 'Damage now -> best'),
+        frame, self.upg = self._tree(left, ('gain', 'verdict', 'swaps', 'dmg'), ('Gain', 'Worth it?', 'Items', 'Now -> best'),
                                      (60, 80, 45, 120), tree_width=200)
         self.upg.tag_configure('big', foreground='#2e7d32')
         self.upg.tag_configure('small', foreground='#777')
@@ -947,7 +962,7 @@ class App(tk.Tk):
         self.grid_now.show(now, {s: '#fbe3c4' for s in u['changes']})
         self.grid_best.show(best, marks)
         where = self.item_bags()
-        lines = [f"{verdict(u['gain'])}: +{u['gain']}% average damage for {u['ws']} ({u['now']} -> {u['best']}), "
+        lines = [f"{verdict(u['gain'])}: +{u['gain']}% {gain_words(u)} ({nowbest(u)}), "
                  f"{len(u['changes'])} item(s) change - all gear this character already owns.", '', 'The swaps:']
         for slot, new in u['changes'].items():
             old = now.get(slot) or '(empty)'
@@ -1344,6 +1359,20 @@ class App(tk.Tk):
         self.cfg_enemy.set(self.cfg['enemy'])
         self.cfg_enemy.grid(row=1, column=1, sticky='w', padx=6, pady=2)
         self.cfg_enemy.bind('<Button-1>', lambda e: self.cfg_enemy.configure(values=self.enemy_list))
+        tpf = ttk.LabelFrame(tab, text='TP sets (engaged)', padding=8)
+        tpf.pack(fill='x', pady=(8, 0))
+        self.cfg_tp_sets = tk.BooleanVar(value=self.cfg.get('tp_sets', True))
+        ttk.Checkbutton(tpf, text='Also check TP sets (sets.engaged / sets.TP) for faster ones from your gear', variable=self.cfg_tp_sets).grid(row=0, column=0, columnspan=4, sticky='w')
+        ttk.Label(tpf, text='Judge them by').grid(row=1, column=0, sticky='w', pady=(4, 0))
+        self.cfg_tp_metric = ttk.Combobox(tpf, values=['time to a weapon skill', 'damage per attack round'], state='readonly', width=24)
+        self.cfg_tp_metric.set('damage per attack round' if self.cfg.get('tp_metric') == 'damage' else 'time to a weapon skill')
+        self.cfg_tp_metric.grid(row=1, column=1, sticky='w', padx=6, pady=(4, 0))
+        ttk.Label(tpf, text='Weapon skill at').grid(row=1, column=2, sticky='w', padx=(12, 0), pady=(4, 0))
+        self.cfg_ws_tp = tk.IntVar(value=self.cfg.get('ws_tp', 1000))
+        ttk.Spinbox(tpf, from_=1000, to=3000, increment=100, textvariable=self.cfg_ws_tp, width=6).grid(row=1, column=3, sticky='w', padx=6, pady=(4, 0))
+        ttk.Label(tpf, text='TP sets keep the damage taken they have now (a DT set stays a DT set). Sets made for something else '
+                            '(Subtle Blow, Accuracy...) are judged by speed only: check those before applying.', foreground='#666',
+                  wraplength=900).grid(row=2, column=0, columnspan=4, sticky='w', pady=(4, 0))
         subs = ttk.LabelFrame(tab, text='Sub job used for each job', padding=8)
         subs.pack(fill='x', pady=8)
         self.cfg_subs = {}
@@ -1408,6 +1437,9 @@ class App(tk.Tk):
         self.cfg['enemy'] = self.cfg_enemy.get() or 'Apex Toad'
         self.cfg['subs'] = {j: cb.get() for j, cb in self.cfg_subs.items()}
         self.cfg['daily'] = bool(self.cfg_daily.get())
+        self.cfg['tp_sets'] = bool(self.cfg_tp_sets.get())
+        self.cfg['tp_metric'] = 'damage' if self.cfg_tp_metric.get().startswith('damage') else 'time'
+        self.cfg['ws_tp'] = int(self.cfg_ws_tp.get())
         save_settings(self.cfg)
         messagebox.showinfo('GearSwap Doctor', 'Saved. The next Check now uses them.')
 
@@ -1532,7 +1564,7 @@ class App(tk.Tk):
                     self.info[row] = u['error']
                     continue
                 row = t.insert(fid, 'end', iid=self._iid('u'), text=OFF + ' ' + u['ws'],
-                               values=(f"+{u['gain']}%", verdict(u['gain']), len(u['changes']), f"{u['now']} -> {u['best']}"),
+                               values=(f"+{u['gain']}%", verdict(u['gain']), len(u['changes']), nowbest(u)),
                                tags=('big' if u['gain'] >= 15 else 'small' if u['gain'] < 5 else '',))
                 self.rows[row] = (f['path'], ('slots', u['set'], u['changes']))
                 self.info[('u', row)] = u
@@ -1576,6 +1608,7 @@ class App(tk.Tk):
         def work():
             try:
                 rep = doctor.checkup(who, wsdist=updater.installed(), sub=cfg.get('subs') or 'WAR', tp=cfg.get('tp', 1500), enemy=cfg.get('enemy', 'Apex Toad'),
+                                     tp_sets=cfg.get('tp_sets', True), ws_tp=cfg.get('ws_tp', 1000), tp_metric=cfg.get('tp_metric', 'time'),
                                      progress=lambda m: self.after(0, lambda: self.status.config(text=m + ' ...')))
                 self.after(0, lambda: self._done(rep, who))
             except Exception as e:
@@ -1758,6 +1791,7 @@ def selftest(out_path):
                 rep = doctor.checkup(who, files=files[:1])
                 f = rep['files'][0]
                 out['checkup'] = {'sets': f['sets'], 'problems': len(f['problems']), 'upgrades': len(f['upgrades']),
+                                  'tp_sets': [(u['ws'], u.get('now'), u.get('best')) for u in f['upgrades'] if u.get('kind') == 'tp'],
                                   'errors': [u['error'] for u in f['upgrades'] if 'error' in u][:3]}
                 break
         out['ok'] = True

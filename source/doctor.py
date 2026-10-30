@@ -135,13 +135,90 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
     return out
 
 
-def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=1500, enemy='Apex Toad'):
+def is_tp_set(path):
+    """A TP (engaged / melee) set: sets.engaged..., or sets.TP... as some files name them."""
+    import fixer
+    parts = fixer._path_parts(path)
+    return len(parts) >= 2 and parts[1].lower() in ('engaged', 'tp')
+
+
+def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=1000, enemy='Apex Toad', metric='time',
+                limit=6):
+    """[{set, ws: 'TP: <set>', kind: 'tp', now, best, gain, unit, changes, notes}] for TP sets with a better owned set
+    (his question 2026-10-30: "it seems to do for weaponskills, but does not do anything for calculating TP").
+    The first `limit` TP sets of a file (shortest names first: sets.engaged before sets.engaged.Acc.DW.MidHaste)."""
+    import wsdist_runner as W
+    weapons = [(s['path'], s['gear']) for s in loaded.sets if s['path'].startswith('sets.weapons')]
+    weapons += [(s['path'], s['gear']) for s in loaded.sets if not s['path'].startswith('sets.weapons') and 'main' in s['gear']]
+    tps = sorted((s for s in loaded.sets if is_tp_set(s['path'])), key=lambda s: (s['path'].count('.'), len(s['path'])))
+    out = []
+    # no weapon in the TP set or a weapon set: the weapon of the file's most used weapon skill kind (a COR's Savage Blade
+    # sets -> a sword), the strongest one owned - the same rule the weapon skill sets use
+    known = W.ws_list()
+    kinds = {}
+    for s0 in loaded.sets:
+        w0 = ws_of(s0['path'], known)
+        if w0 and W.ws_skill(w0) not in ('Archery', 'Marksmanship'):
+            kinds.setdefault(W.ws_skill(w0), w0)
+            kinds[W.ws_skill(w0) + '#n'] = kinds.get(W.ws_skill(w0) + '#n', 0) + 1
+    main_ws = None
+    best_n = 0
+    for k, v in kinds.items():
+        if k.endswith('#n') and v > best_n:
+            best_n, main_ws = v, kinds[k[:-2]]
+    for s in tps[:limit]:
+        label = 'TP: ' + s['path'][len('sets.'):]
+        if progress:
+            progress(f'wsdist: {label}')
+        try:
+            owned, cur, notes, _ = W.plan_ws(job, sub, None, s['gear'], weapons, owned_ids, items, index)
+            if 'main' not in cur and main_ws:
+                owned, cur, notes, _ = W.plan_ws(job, sub, main_ws, s['gear'], weapons, owned_ids, items, index)
+            if 'main' not in cur:
+                out.append({'set': s['path'], 'ws': label, 'kind': 'tp', 'error': 'no weapon in this set or a weapon set to test it with'})
+                continue
+            best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=ws_tp, enemy_name=enemy, metric=metric)
+            kp, km = getattr(W.best_tp_set, 'kept_dt', (0, 0))
+            if kp < 0 or km < 0:
+                notes = notes + [f'damage taken kept as it is now (physical {kp:.0f}%, magic {km:.0f}%)']
+        except Exception as e:
+            out.append({'set': s['path'], 'ws': label, 'kind': 'tp', 'error': f'wsdist could not simulate it: {e}'})
+            continue
+        changes = {}
+        for slot, gs in W.GS_SLOT.items():
+            if slot in ('main', 'sub', 'ranged'):
+                continue
+            a = cur.get(slot, {}).get('Name2') if cur.get(slot) else None
+            b = best[slot]['Name2'] if best.get(slot) and best[slot]['Name'] != 'Empty' else None
+            if b and a != b:
+                changes[gs] = _gs_name(best[slot], items)
+        for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):
+            w1, w2 = W.SLOT_MAP[p1], W.SLOT_MAP[p2]
+            cp_ = [cur.get(w1, {}).get('Name') if cur.get(w1) else None, cur.get(w2, {}).get('Name') if cur.get(w2) else None]
+            bp_ = [best[w1]['Name'] if best[w1]['Name'] != 'Empty' else None, best[w2]['Name'] if best[w2]['Name'] != 'Empty' else None]
+            if _pairs_same(cp_, bp_):
+                changes.pop(p1, None)
+                changes.pop(p2, None)
+        if metric == 'time':
+            gain = (now - val) / now * 100 if now else 0          # faster to the weapon skill
+            unit = 's'
+        else:
+            gain = (val - now) / now * 100 if now else 0
+            unit = ''
+        if changes and gain >= 1:
+            out.append({'set': s['path'], 'ws': label, 'kind': 'tp', 'now': round(now, 2 if unit else 0), 'best': round(val, 2 if unit else 0),
+                        'gain': round(gain, 1), 'unit': unit, 'changes': changes, 'notes': notes})
+    return out
+
+
+def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=1500, enemy='Apex Toad', tp_sets=True,
+            ws_tp=1000, tp_metric='time'):
     """(sub: one sub job for every file, or {job: sub}; tp / enemy: what wsdist simulates against)"""
     """The whole check-up; saves and returns the report."""
     items = checks.Items()
     bags = checks.load_bags(character)
     report = {'character': character, 'time': int(time.time()), 'bags_time': bags.get('_time') if bags else None,
-              'tp': tp, 'enemy': enemy, 'files': []}
+              'tp': tp, 'enemy': enemy, 'tp_sets': tp_sets, 'ws_tp': ws_tp, 'tp_metric': tp_metric, 'files': []}
     owned_ids = set()
     if bags:
         for b, c in bags.items():
@@ -163,6 +240,9 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
         if index is not None and job and not loaded.error:
             js = sub.get(job, 'WAR') if isinstance(sub, dict) else sub
             entry['upgrades'] = ws_upgrades(loaded, job, js, owned_ids, items, index, progress=progress, tp=tp, enemy=enemy)
+            if tp_sets:
+                entry['upgrades'] += tp_upgrades(loaded, job, js, owned_ids, items, index, progress=progress, ws_tp=ws_tp,
+                                                 enemy=enemy, metric=tp_metric)
             entry['sub'] = js
         report['files'].append(entry)
     os.makedirs(DATA, exist_ok=True)
