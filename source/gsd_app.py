@@ -34,7 +34,7 @@ import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = '2.1.0'
+VERSION = '2.2.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -408,24 +408,49 @@ class App(tk.Tk):
         box.insert('1.0', text)
         box.config(state='disabled')
 
-    # ------------------------------------------------------------------ Start here
+    # ------------------------------------------------------------------ Jobs (the main page)
+    # His request 2026-10-30: "i should be able to click a job, and be able to either do everything at once or
+    # individually. the gui to interface with this isnt well done and hard to navigate". Left: the jobs, with what each
+    # needs; right: "All jobs" (the to-do list) or one job's page - misspelled names, upgrades, things to look at - each
+    # with ticks, and "Do everything for <job>" / "Fix misspelled" / "Apply ticked upgrades".
     def _start_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
         self.tab_start = tab
-        self.nb.add(tab, text='★ Start here')
-        head = ttk.Frame(tab)
+        self.nb.add(tab, text='★ Jobs')
+        pw = ttk.PanedWindow(tab, orient='horizontal')
+        pw.pack(fill='both', expand=True)
+        left = ttk.Frame(pw)
+        ttk.Label(left, text='Click a job', font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+        self.job_list = ttk.Treeview(left, columns=('must', 'should', 'up'), show='tree headings', selectmode='browse', height=20)
+        self.job_list.heading('#0', text='Job')
+        self.job_list.column('#0', width=150)
+        for c, h, tip in (('must', '✖', 'must fix'), ('should', '⚠', 'should fix'), ('up', '↑', 'upgrades')):
+            self.job_list.heading(c, text=h)
+            self.job_list.column(c, width=36, anchor='center')
+        self.job_list.tag_configure('must', foreground='#c0392b')
+        self.job_list.tag_configure('ok', foreground='#2e7d32')
+        self.job_list.pack(fill='both', expand=True, pady=(4, 0))
+        self.job_list.bind('<<TreeviewSelect>>', lambda e: self.show_job())
+        ttk.Label(left, text='✖ must fix   ⚠ should fix   ↑ upgrades', foreground='#666').pack(anchor='w', pady=(4, 0))
+        pw.add(left, weight=1)
+        self.job_right = ttk.Frame(pw, padding=(10, 0, 0, 0))
+        pw.add(self.job_right, weight=5)
+
+        # "All jobs": the to-do list (cards)
+        self.all_frame = ttk.Frame(self.job_right)
+        head = ttk.Frame(self.all_frame)
         head.pack(fill='x')
         self.start_head = ttk.Label(head, text='', font=('Segoe UI', 12, 'bold'))
         self.start_head.pack(side='left')
-        self.start_job = ttk.Combobox(head, values=['All jobs'], state='readonly', width=12)
+        self.all_btn = ttk.Button(head, text='✔ Do everything for all jobs', style='Big.TButton', command=lambda: self.do_everything(None))
+        self.all_btn.pack(side='right')
+        ToolTip(self.all_btn, 'Fixes every misspelled name and applies every ticked upgrade in all jobs. You see the full list of '
+                              'changes first; every file is backed up.')
+        self.start_job = ttk.Combobox(head, values=['All jobs'], state='readonly', width=12)   # (set by the job list)
         self.start_job.set('All jobs')
-        self.start_job.pack(side='right')
-        self.start_job.bind('<<ComboboxSelected>>', lambda e: self.fill_start())
-        ttk.Label(head, text='Jobs:').pack(side='right', padx=4)
-        ToolTip(self.start_job, 'Show only the files for one job - e.g. the job you play the most.')
-        self.start_sub = ttk.Label(tab, text='', foreground='#555', wraplength=1100, justify='left')
+        self.start_sub = ttk.Label(self.all_frame, text='', foreground='#555', wraplength=900, justify='left')
         self.start_sub.pack(anchor='w', pady=(2, 8))
-        outer = ttk.Frame(tab)
+        outer = ttk.Frame(self.all_frame)
         outer.pack(fill='both', expand=True)
         canvas = tk.Canvas(outer, highlightthickness=0, background='#f4f4f4')
         sb = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview)
@@ -437,7 +462,245 @@ class App(tk.Tk):
         canvas.pack(side='left', fill='both', expand=True)
         sb.pack(side='right', fill='y')
         canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-e.delta / 120), 'units')
-                        if str(self.nb.select()) == str(self.tab_start) else None)
+                        if str(self.nb.select()) == str(self.tab_start) and self.all_frame.winfo_ismapped() else None)
+
+        # one job's page
+        self.job_frame = ttk.Frame(self.job_right)
+        jh = ttk.Frame(self.job_frame)
+        jh.pack(fill='x')
+        self.job_title = ttk.Label(jh, text='', font=('Segoe UI', 13, 'bold'))
+        self.job_title.pack(side='left')
+        self.job_do = ttk.Button(jh, text='', style='Big.TButton', command=lambda: self.do_everything(self.cur_job))
+        self.job_do.pack(side='right')
+        self.job_files = ttk.Label(self.job_frame, text='', foreground='#555')
+        self.job_files.pack(anchor='w', pady=(0, 6))
+        ttk.Label(self.job_frame, text='Ticked = will be done. Click a box to tick / untick. "Do everything" does all the ticked '
+                  'rows below at once; or use the button of one part. You always see the list of changes first.',
+                  foreground='#555', wraplength=780).pack(anchor='w', pady=(0, 6))
+
+        def section(title):
+            lf = ttk.LabelFrame(self.job_frame, text=title, padding=6)
+            lf.pack(fill='x', pady=4)
+            return lf
+
+        s1 = section('1. Misspelled names - GearSwap skips them, so those slots stay empty')
+        self.jt_fix = ttk.Treeview(s1, columns=('fix', 'sets'), show='tree headings', height=4)
+        self.jt_fix.heading('#0', text='Name in the file')
+        self.jt_fix.column('#0', width=300)
+        self.jt_fix.heading('fix', text='Becomes')
+        self.jt_fix.column('fix', width=300)
+        self.jt_fix.heading('sets', text='Sets')
+        self.jt_fix.column('sets', width=50, anchor='center')
+        self.jt_fix.pack(side='left', fill='x', expand=True)
+        self.jt_fix.bind('<Button-1>', self._job_tick)
+        b1 = ttk.Frame(s1)
+        b1.pack(side='right', padx=6)
+        ttk.Button(b1, text='Fix ticked names', command=lambda: self.do_job_part(self.cur_job, 'fix')).pack()
+
+        s2 = section('2. Upgrades - better weapon skill sets from gear you already own (wsdist)')
+        self.jt_up = ttk.Treeview(s2, columns=('gain', 'worth', 'items', 'dmg'), show='tree headings', height=6)
+        self.jt_up.heading('#0', text='Weapon skill')
+        self.jt_up.column('#0', width=220)
+        for c, h, w in (('gain', 'Gain', 70), ('worth', 'Worth it?', 90), ('items', 'Items', 50), ('dmg', 'Damage now -> best', 140)):
+            self.jt_up.heading(c, text=h)
+            self.jt_up.column(c, width=w, anchor='w')
+        self.jt_up.tag_configure('big', foreground='#2e7d32')
+        self.jt_up.tag_configure('small', foreground='#777')
+        self.jt_up.pack(side='left', fill='x', expand=True)
+        self.jt_up.bind('<Button-1>', self._job_tick)
+        self.jt_up.bind('<<TreeviewSelect>>', lambda e: self._job_up_detail())
+        b2 = ttk.Frame(s2)
+        b2.pack(side='right', padx=6)
+        ttk.Button(b2, text='Apply ticked upgrades', command=lambda: self.do_job_part(self.cur_job, 'up')).pack(fill='x')
+        ttk.Button(b2, text='See in the gear grid', command=self._job_up_grid).pack(fill='x', pady=(4, 0))
+        self.jt_up_text = self._textbox(self.job_frame, 6)
+        self.jt_up_text.pack(fill='x')
+
+        s3 = section('3. For you to look at - these need you (or another tool) to fix')
+        self.jt_look = ttk.Treeview(s3, columns=('imp', 'what', 'todo'), show='tree headings', height=5)
+        self.jt_look.heading('#0', text='Item / set')
+        self.jt_look.column('#0', width=220)
+        for c, h, w in (('imp', 'Importance', 90), ('what', 'What', 90), ('todo', 'What to do', 460)):
+            self.jt_look.heading(c, text=h)
+            self.jt_look.column(c, width=w, anchor='w')
+        for lv, col in LEVEL_COLOR.items():
+            self.jt_look.tag_configure(lv, foreground=col if lv != 'info' else '#666')
+        self.jt_look.pack(fill='x', expand=True)
+        nb_ = ttk.Frame(self.job_frame)
+        nb_.pack(fill='x', pady=(4, 0))
+        self.job_missing = ttk.Label(nb_, text='', foreground='#666')
+        self.job_missing.pack(side='left')
+        ttk.Button(nb_, text='Show the list', command=lambda: self.show_problems('missing')).pack(side='left', padx=6)
+        self.cur_job = None
+        self.job_ticks = set()          # keys of the ticked rows: ('r', path, old) / ('u', path, set)
+        self.job_rowkey = {}            # tree row -> (key, edit)
+
+    def _files_of(self, job):
+        r = self.report or {}
+        return [f for f in r.get('files', []) if job is None or (f.get('job') or '?') == job]
+
+    def fill_jobs(self):
+        """The job list (left) and the default ticks: names with a fix, upgrades from +5 % to +100 % (bigger ones are
+        usually missing gear, smaller ones barely matter: untick / tick as you like)."""
+        t = self.job_list
+        keep = self.cur_job
+        t.delete(*t.get_children())
+        t.insert('', 'end', iid='__all__', text='★ All jobs')
+        r = self.report
+        self.job_ticks = set()
+        if not r:
+            self.show_job()
+            return
+        jobs = {}
+        for f in r['files']:
+            jobs.setdefault(f.get('job') or '?', []).append(f)
+        for job in sorted(jobs):
+            must = sum(1 for f in jobs[job] for p in f['problems'] if KIND_LEVEL.get(p['kind']) == 'must')
+            should = sum(1 for f in jobs[job] for p in f['problems'] if KIND_LEVEL.get(p['kind']) == 'should')
+            up = sum(1 for f in jobs[job] for u in f['upgrades'] if 'error' not in u)
+            t.insert('', 'end', iid='job:' + job, text=job, values=(must or '', should or '', up or ''),
+                     tags=('must',) if must else ('ok',) if not should and not up else ())
+            for f in jobs[job]:
+                for p in f['problems']:
+                    if p['kind'] == 'unknown' and p.get('fix'):
+                        self.job_ticks.add(('r', f['path'], p['item']))
+                for u in f['upgrades']:
+                    if 'error' not in u and 5 <= u['gain'] <= 100:
+                        self.job_ticks.add(('u', f['path'], u['set']))
+        sel = 'job:' + keep if keep and t.exists('job:' + keep) else '__all__'
+        t.selection_set(sel)
+        self.show_job()
+
+    def show_job(self):
+        sel = self.job_list.selection()
+        key = sel[0] if sel else '__all__'
+        if key == '__all__':
+            self.cur_job = None
+            self.job_frame.pack_forget()
+            self.all_frame.pack(fill='both', expand=True)
+            self.start_job.set('All jobs')
+            self.fill_start()
+            return
+        self.cur_job = key[4:]
+        self.all_frame.pack_forget()
+        self.job_frame.pack(fill='both', expand=True)
+        self.fill_job_page()
+
+    def _box(self, key):
+        return ON if key in self.job_ticks else OFF
+
+    def fill_job_page(self):
+        job = self.cur_job
+        files = self._files_of(job)
+        self.job_title.config(text=f'{self.who.get()}  -  {job}')
+        self.job_do.config(text=f'✔ Do everything for {job}')
+        self.job_files.config(text='Files: ' + ', '.join(f"{f['file']} ({f['sets']} sets)" for f in files))
+        self.job_rowkey = {}
+        for t in (self.jt_fix, self.jt_up, self.jt_look):
+            t.delete(*t.get_children())
+        n_fix = n_up = n_look = n_missing = 0
+        for f in files:
+            for p in f['problems']:
+                if p['kind'] == 'unknown' and p.get('fix'):
+                    key = ('r', f['path'], p['item'])
+                    row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}", values=(p['fix'], len(p['sets'])))
+                    self.job_rowkey[('fix', row)] = (key, (f['path'], ('rename', p['item'], p['fix'])))
+                    n_fix += 1
+                elif p['kind'] == 'missing':
+                    n_missing += 1
+                else:
+                    lv = KIND_LEVEL.get(p['kind'], 'info')
+                    self.jt_look.insert('', 'end', text=p['item'], values=(LEVEL_TEXT[lv], KIND_TEXT.get(p['kind'], p['kind']),
+                                        KIND_HELP.get(p['kind'], ('', ''))[1] + (f"  ({p['detail']})" if p['kind'] == 'broken' else '')),
+                                        tags=(lv,))
+                    n_look += 1
+            for u in sorted(f['upgrades'], key=lambda u: -(u.get('gain') or -1)):
+                if 'error' in u:
+                    continue
+                key = ('u', f['path'], u['set'])
+                row = self.jt_up.insert('', 'end', text=f"{self._box(key)} {u['ws']}",
+                                        values=(f"+{u['gain']}%", verdict(u['gain']) + (' ⚑' if u['gain'] > 100 else ''),
+                                                len(u['changes']), f"{u['now']} -> {u['best']}"),
+                                        tags=('big' if u['gain'] >= 15 else 'small' if u['gain'] < 5 else '',))
+                self.job_rowkey[('up', row)] = (key, (f['path'], ('slots', u['set'], u['changes'])), u)
+                n_up += 1
+        if not n_fix:
+            self.jt_fix.insert('', 'end', text='   (none - every name is a real item)')
+        if not n_up:
+            self.jt_up.insert('', 'end', text='   (none - wsdist found nothing better among your gear)')
+        if not n_look:
+            self.jt_look.insert('', 'end', text='(nothing)', values=('', '', ''))
+        self.job_missing.config(text=f"Not owned: {n_missing} item(s) named in these sets that you don't have - usually "
+                                     "nothing to do." if n_missing else "Every item in these sets is one you own.")
+        self._say(self.jt_up_text, 'Click an upgrade to see exactly what it swaps.' if n_up else '')
+
+    def _job_tick(self, e):
+        t = e.widget
+        row = t.identify_row(e.y)
+        part = 'fix' if t is self.jt_fix else 'up'
+        rec = self.job_rowkey.get((part, row))
+        if not rec or t.identify_column(e.x) != '#0':
+            return
+        key = rec[0]
+        if key in self.job_ticks:
+            self.job_ticks.discard(key)
+        else:
+            self.job_ticks.add(key)
+        txt = t.item(row, 'text')
+        t.item(row, text=self._box(key) + txt[1:])
+
+    def _job_up_detail(self):
+        sel = self.jt_up.selection()
+        rec = self.job_rowkey.get(('up', sel[0])) if sel else None
+        if not rec:
+            return
+        key, (path, edit), u = rec
+        now = self.set_gear(path, u['set'])
+        where = self.item_bags()
+        lines = [f"{verdict(u['gain'])}: +{u['gain']}% average damage for {u['ws']} ({u['now']} -> {u['best']})  -  "
+                 f"{os.path.basename(path)}, {u['set']}"]
+        for slot, new in u['changes'].items():
+            bag = where.get(new.lower())
+            lines.append(f"  {SLOT_TEXT.get(slot, slot):<7} {now.get(slot) or '(empty)'}  ->  {new}" + (f"   (in your {bag})" if bag else ''))
+        if u['gain'] > 100:
+            lines.append(BIG_GAIN_NOTE)
+        self._say(self.jt_up_text, '\n'.join(lines))
+
+    def _job_up_grid(self):
+        sel = self.jt_up.selection()
+        rec = self.job_rowkey.get(('up', sel[0])) if sel else None
+        if rec:
+            self.show_upgrade_for(rec[1][0], rec[2]['set'])
+
+    def _ticked_edits(self, job, part=None):
+        """{path: [edits]} for the ticked rows of one job (None = all jobs); part 'fix' / 'up' / None = both."""
+        by_file = {}
+        for f in self._files_of(job):
+            if part in (None, 'fix'):
+                for p in f['problems']:
+                    if p['kind'] == 'unknown' and p.get('fix') and ('r', f['path'], p['item']) in self.job_ticks:
+                        by_file.setdefault(f['path'], []).append(('rename', p['item'], p['fix']))
+            if part in (None, 'up'):
+                for u in f['upgrades']:
+                    if 'error' not in u and ('u', f['path'], u['set']) in self.job_ticks:
+                        by_file.setdefault(f['path'], []).append(('slots', u['set'], u['changes']))
+        return by_file
+
+    def do_job_part(self, job, part):
+        by_file = self._ticked_edits(job, part)
+        if not by_file:
+            messagebox.showinfo('GearSwap Doctor', 'Nothing ticked there. Click the boxes of the rows you want first.')
+            return
+        self._apply(by_file)
+
+    def do_everything(self, job):
+        """Every ticked misspelled name and upgrade of this job (None = all jobs), in one go - after the list of changes."""
+        by_file = self._ticked_edits(job, None)
+        if not by_file:
+            messagebox.showinfo('GearSwap Doctor', 'Nothing to do' + (f' for {job}' if job else '') + ': no misspelled names to '
+                                'fix and no ticked upgrades.')
+            return
+        self._apply(by_file)
 
     def _card(self, level, title, text, buttons=()):
         """One line of the to-do list: a coloured bar, what it is, why, and buttons for the next step."""
@@ -530,6 +793,9 @@ class App(tk.Tk):
         if by.get('missing'):
             self._card('info', f"{len(by['missing'])} item(s) named in your sets that you don't own", KIND_HELP['missing'][1],
                        [('Show the list', lambda: self.show_problems('missing'))])
+        if pick == 'All jobs' and r['files']:
+            self._card('info', 'Or work one job at a time', 'Click a job on the left: its misspelled names, upgrades and the '
+                       'things to look at, each with ticks, and "Do everything for" that job.', [])
         if not probs and not ups:
             self._card('good', 'All good', 'Every set loads, every item is real and wearable, and wsdist found nothing better '
                        'among the gear you own.', [])
@@ -1166,7 +1432,7 @@ class App(tk.Tk):
             self.sim_file.set(names[0])
         if names:
             self.sim_file_changed()
-        self.fill_start()
+        self.fill_jobs()
         self.fill_overview()
         self.fill_problems()
         self.fill_upgrades()
