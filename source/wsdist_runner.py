@@ -61,10 +61,10 @@ def _wsdist():
         os.chdir(WS_DIR)               # (wsdist reads item_list.csv etc. from its own folder)
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                import gear, wsdist, create_player, enemies, actions
+                import gear, wsdist, create_player, enemies, actions, buffs
         finally:
             os.chdir(cwd)
-        _mods = {'gear': gear, 'wsdist': wsdist, 'create_player': create_player, 'enemies': enemies, 'actions': actions}
+        _mods = {'gear': gear, 'wsdist': wsdist, 'create_player': create_player, 'enemies': enemies, 'actions': actions, 'buffs': buffs}
     return _mods
 
 
@@ -117,14 +117,107 @@ def enemies():
     return sorted(_wsdist()['enemies'].preset_enemies)
 
 
-def _enemy(enemy_name):
+def _enemy(enemy_name, debuffs=None):
+    """A wsdist enemy, with Dia / Frailty etc. on it the way wsdist's window does it (buff_stats)."""
     mods = _wsdist()
     cp, en = mods['create_player'], mods['enemies']
     e = dict(en.preset_enemies[enemy_name])
     enemy = cp.create_enemy({k: e[k] for k in e if k not in ('Level', 'Location', 'Name')})
+    for stat, v in (debuffs or {}).items():
+        if stat == 'Defense':
+            enemy.stats['Defense'] *= 1 - v
+        else:
+            enemy.stats[stat] = enemy.stats.get(stat, 0) - v
     enemy.stats['Base Defense'] = e['Defense']
+    enemy.stats['Defense'] = max(1, enemy.stats.get('Defense', 1))
+    enemy.stats['Magic Defense'] = max(-50, enemy.stats.get('Magic Defense', 0))
     enemy.stats['Magic Damage Taken'] = enemy.stats.pop('Magic DT%', 0)
     return enemy
+
+
+# ---- buffs: what the party gives while a set is judged. A choice ('none' / 'solo' / 'party' / 'custom') -> a plain list
+# of what's up (BUFF_PRESETS, or his own ticks, saved in the settings) -> wsdist's own numbers (buff_stats, the same sums
+# as gui_main.aggregate_buffs, from wsdist's buffs.py and gear.all_food).
+BUFF_CHOICES = {'none': 'None', 'solo': 'Solo (food + trusts)', 'party': 'Typical party', 'custom': 'Custom'}
+BUFF_TEXT = {'none': 'no buffs', 'solo': 'solo buffs (food + trusts)', 'party': 'typical party buffs', 'custom': 'custom buffs'}
+BUFF_PRESETS = {
+    'none': {},
+    # Haste II from Koru-Moru, two Marches from Joachim + Ulmia (trusts have no Songs+ gear)
+    'solo': {'food': 'Grape Daifuku', 'haste': 'Haste II', 'songs': ['Victory March', 'Advancing March'], 'song_bonus': 0},
+    # a WHM / RDM, a BRD and a COR, with wsdist's usual gear bonuses; a middling roll, not a lucky one
+    'party': {'food': 'Grape Daifuku', 'haste': 'Haste II', 'dia': 'Dia II',
+              'songs': ['Honor March', 'Victory March', 'Minuet V', 'Blade Madrigal'], 'song_bonus': 7,
+              'rolls': {'Chaos': 'VII', 'Samurai': 'VII'}, 'roll_bonus': 7, 'job_bonus': True},
+}
+BUFF_LIMITS = {'songs': 5, 'rolls': 4, 'bubbles': 3}        # (as many as wsdist's window has places for)
+BUBBLE_SLOTS = ('Indi-', 'Geo-', 'Entrust-')
+ROLL_NUMBERS = ('I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI')
+
+
+def buff_spec(choice, custom=None):
+    """What's up for a choice: a copy of the preset, or his own ticks for 'custom'."""
+    return dict(custom or {}) if choice == 'custom' else dict(BUFF_PRESETS.get(choice) or {})
+
+
+def buff_text(choice):
+    """For the status line: 'typical party buffs'."""
+    return BUFF_TEXT.get(choice, 'no buffs')
+
+
+def buff_options():
+    """What wsdist knows, for the Custom ticks. Shell V is left out: a melee set doesn't do more with it, and it would
+    count towards the damage taken he types for the gear."""
+    mods = _wsdist()
+    b = mods['buffs']
+    return {'songs': list(b.brd), 'rolls': list(b.cor), 'bubbles': list(b.geo) + list(b.geo_debuffs),
+            'food': list(mods['gear'].all_food), 'haste': ['Haste', 'Haste II'], 'dia': list(b.whm_debuffs),
+            'boost': [k for k in b.whm if k.startswith(('Boost-', 'Gain-'))]}
+
+
+def buff_stats(spec):
+    """(buffs for create_player / build_set, debuffs for the enemy, aftermath level) from what's up. A name this wsdist
+    doesn't know (after an update) is skipped."""
+    spec = spec or {}
+    mods = _wsdist()
+    b = mods['buffs']
+    out = {'brd': {}, 'cor': {}, 'geo': {}, 'whm': {}, 'food': {}}
+    debuffs = {}
+
+    def add(group, stat, v):
+        group[stat] = group.get(stat, 0) + v
+    bonus = spec.get('song_bonus', 7)
+    for song in (spec.get('songs') or [])[:BUFF_LIMITS['songs']]:
+        for stat, v in b.brd.get(song, {}).items():
+            add(out['brd'], stat, v[0] + min(b.brd_song_limits.get(song, bonus), bonus) * v[1]
+                + 20 * ('minuet' in song.lower() and stat.lower() in ('attack', 'ranged attack')))
+    for stat in ('Attack', 'Ranged Attack'):
+        if stat in out['brd']:
+            out['brd'][stat] = int(out['brd'][stat])
+    for roll, number in list((spec.get('rolls') or {}).items())[:BUFF_LIMITS['rolls']]:
+        for stat, v in b.cor.get(roll, {}).items():
+            add(out['cor'], stat, v[0].get(number, 0) + spec.get('roll_bonus', 7) * v[1] + (v[2] if spec.get('job_bonus', True) else 0))
+    potency = spec.get('bubble_potency', 50) / 100          # (a debuff bubble is rarely at full strength: wsdist's 50 %)
+    for slot, bubble in zip(BUBBLE_SLOTS, spec.get('bubbles') or []):
+        extra = spec.get('bubble_bonus', 10) if slot != 'Entrust-' else 0        # (Entrust doesn't get Geomancy+)
+        for stat, v in b.geo.get(bubble, {}).items():
+            add(out['geo'], stat, v[0] + extra * v[1])
+        for stat, v in b.geo_debuffs.get(bubble, {}).items():
+            add(debuffs, stat, (v[0] + extra * v[1]) * potency)
+    for spell in (spec.get('haste'), spec.get('boost')):
+        for stat, v in b.whm.get(spell, {}).items():
+            add(out['whm'], stat, v)
+    for stat, v in b.whm_debuffs.get(spec.get('dia'), {}).items():
+        add(debuffs, stat, v)
+    for stat, v in mods['gear'].all_food.get(spec.get('food'), {}).items():
+        if stat not in ('Name', 'Name2', 'Type'):
+            # (food's Attack comes after Attack % from Chaos Roll etc: wsdist has its own name for it)
+            out['food'][{'Attack': 'Food Attack', 'Ranged Attack': 'Food Ranged Attack'}.get(stat, stat)] = v
+    return out, debuffs, int(spec.get('aftermath') or 0)
+
+
+def _abilities(aftermath=0):
+    return {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': aftermath, 'Storm spell': 'None', 'Enhancing Skill': 0,
+            'Verbose Swaps': False}
 
 
 TP_METRICS = {'time': 'Time to WS', 'damage': 'Damage dealt'}
@@ -157,11 +250,11 @@ def _dt_score(it, need_p, need_m):
     return (p if need_p else 0) + (m if need_m else 0)
 
 
-def dt_start(cp, job, sub, ml, start, check, req, abilities):
+def dt_start(cp, job, sub, ml, start, check, req, abilities, buffs=None):
     """A starting set for a damage taken target: the set as it is when it has it already; otherwise the gear with the
     most damage taken goes into the slots (weapons stay). Returns (start, the target it can reach): when his gear can't
     reach the target, the most it can - wsdist then looks for the best set with that."""
-    player = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+    player = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=buffs or {}, abilities=abilities)
     p, m = dt_of(player)
     if p <= req[0] + 0.01 and m <= req[1] + 0.01:
         return start, req
@@ -184,7 +277,7 @@ def dt_start(cp, job, sub, ml, start, check, req, abilities):
             if best is not None:
                 new[slot] = best
                 taken[slot] = best.get('Name')
-        player = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(new), buffs={}, abilities=abilities)
+        player = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(new), buffs=buffs or {}, abilities=abilities)
         p, m = dt_of(player)
     return new, (max(req[0], p), max(req[1], m))
 
@@ -194,14 +287,16 @@ def _tp_value(out, metric):
     return out[0] if metric == 'time' else out[1][0]
 
 
-def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None):
+def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None, buffs=None):
     """The best TP (engaged) set from the owned gear (wsdist's "attack round" - Melee TP set). metric 'time': the
     seconds of auto-attacks from 0 TP to ws_tp (lower is better); 'damage': damage per attack round. Returns (best
     {slot: entry}, best value, current value). req: (PDT, MDT) the new set must reach (his numbers, dt_requirement);
-    None = at least what the set has now. info (a dict) gets the damage taken: now / best / asked."""
+    None = at least what the set has now. info (a dict) gets the damage taken: now / best / asked. buffs: what's up
+    (buff_spec), none when left out."""
     mods = _wsdist()
     cp, ws_mod, act = mods['create_player'], mods['wsdist'], mods['actions']
-    enemy = _enemy(enemy_name)
+    stats, debuffs, aftermath = buff_stats(buffs)
+    enemy = _enemy(enemy_name, debuffs)
     empty = mods['gear'].Empty
     start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
     check = {slot: list(owned.get(slot, [])) for slot in SLOT_MAP.values()}
@@ -215,14 +310,13 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             check[slot].append(start[slot])
         if not check[slot]:
             check[slot] = [start[slot]]
-    abilities = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': 0, 'Storm spell': 'None', 'Enhancing Skill': 0,
-                 'Verbose Swaps': False}
+    abilities = _abilities(aftermath)
     m = TP_METRICS.get(metric, 'Time to WS')
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=stats, abilities=abilities)
             now = act.average_attack_round(player0, enemy, 0, ws_tp, m)
             # keep the set's damage taken: a TP.DT set made "faster" by dropping its DT gear would be no use - the new
             # set must have at least the physical / magic DT the set has now (wsdist's PDT / MDT requirement)
@@ -230,8 +324,8 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             req_p, req_m = req if req else (min(0, pdt), min(0, mdt))
             first = start
             if req:
-                first, (req_p, req_m) = dt_start(cp, job, sub, ml, start, check, req, abilities)
-            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, {}, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
+                first, (req_p, req_m) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
+            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
                                        check, dict(first), req_p, req_m, m, False, 0)
             after = act.average_attack_round(best, enemy, 0, ws_tp, m)
             dt_best = dt_of(best)
@@ -243,20 +337,20 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
     return best.gearset, _tp_value(after, metric), _tp_value(now, metric)
 
 
-def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, info=None):
+def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, info=None, buffs=None):
     """A TP set as it is: seconds to the weapon skill (or damage per round); info gets its damage taken."""
     mods = _wsdist()
     cp, act = mods['create_player'], mods['actions']
-    enemy = _enemy(enemy_name)
+    stats, debuffs, aftermath = buff_stats(buffs)
+    enemy = _enemy(enemy_name, debuffs)
     empty = mods['gear'].Empty
     start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
-    abilities = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': 0, 'Storm spell': 'None', 'Enhancing Skill': 0,
-                 'Verbose Swaps': False}
+    abilities = _abilities(aftermath)
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=stats, abilities=abilities)
             now = act.average_attack_round(player0, enemy, 0, ws_tp, TP_METRICS.get(metric, 'Time to WS'))
             if info is not None:
                 info['now'] = dt_of(player0)
@@ -265,20 +359,20 @@ def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='
     return _tp_value(now, metric)
 
 
-def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20, info=None):
+def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20, info=None, buffs=None):
     """The average damage of one weapon skill with this set (wsdist's Quicklook), or raises."""
     mods = _wsdist()
     cp, act = mods['create_player'], mods['actions']
-    enemy = _enemy(enemy_name)
+    stats, debuffs, aftermath = buff_stats(buffs)
+    enemy = _enemy(enemy_name, debuffs)
     empty = mods['gear'].Empty
     start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
-    abilities = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': 0, 'Storm spell': 'None', 'Enhancing Skill': 0,
-                 'Verbose Swaps': False}
+    abilities = _abilities(aftermath)
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=stats, abilities=abilities)
             now = act.average_ws(player0, enemy, ws, tp, 'melee', 'Damage dealt')
             if info is not None:
                 info['now'] = dt_of(player0)
@@ -287,16 +381,14 @@ def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20, in
     return now[1][0]
 
 
-def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', ml=20, req=None, info=None):
+def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', ml=20, req=None, info=None, buffs=None):
     """owned: {wsdist slot: [entries]}; current: {wsdist slot: entry}. Returns (best {slot: entry}, best damage,
     current damage) or raises. req: (PDT, MDT) the new set must reach (dt_requirement), None = no damage taken asked.
-    info (a dict) gets the damage taken: now / best / asked."""
+    info (a dict) gets the damage taken: now / best / asked. buffs: what's up (buff_spec), none when left out."""
     mods = _wsdist()
-    cp, en, ws_mod, act = mods['create_player'], mods['enemies'], mods['wsdist'], mods['actions']
-    e = dict(en.preset_enemies[enemy_name])
-    enemy = cp.create_enemy({k: e[k] for k in e if k not in ('Level', 'Location', 'Name')})
-    enemy.stats['Base Defense'] = e['Defense']
-    enemy.stats['Magic Damage Taken'] = enemy.stats.pop('Magic DT%', 0)
+    cp, ws_mod, act = mods['create_player'], mods['wsdist'], mods['actions']
+    stats, debuffs, aftermath = buff_stats(buffs)
+    enemy = _enemy(enemy_name, debuffs)
     empty = mods['gear'].Empty
     start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
     check = {slot: list(owned.get(slot, [])) for slot in SLOT_MAP.values()}
@@ -312,20 +404,19 @@ def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', m
             check[slot].append(start[slot])
         if not check[slot]:
             check[slot] = [start[slot]]
-    abilities = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': 0, 'Storm spell': 'None', 'Enhancing Skill': 0,
-                 'Verbose Swaps': False}
+    abilities = _abilities(aftermath)
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=stats, abilities=abilities)
             now = act.average_ws(player0, enemy, ws, tp, 'melee', 'Damage dealt')
             dt_now = dt_of(player0)
             rp, rm = req if req else (0, 0)
             first = start
             if req:
-                first, (rp, rm) = dt_start(cp, job, sub, ml, start, check, req, abilities)
-            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, {}, abilities, enemy, ws, 'None', 'weapon skill', tp,
+                first, (rp, rm) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
+            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, ws, 'None', 'weapon skill', tp,
                                        check, dict(first), rp, rm, 'Damage dealt', False, 0)
             after = act.average_ws(best, enemy, ws, tp, 'melee', 'Damage dealt')
             dt_best = dt_of(best)

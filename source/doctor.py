@@ -108,10 +108,10 @@ def _dt_fields(info, req):
 
 
 def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=None, tp=1500, enemy='Apex Toad',
-                targets=None):
+                targets=None, buffs=None):
     """[{set, ws, now, best, gain, changes: {gs slot: name}, notes, dt_now, dt_best (, dt_asked, dt_met)}] for weapon
     skill sets with a better owned set. targets: {set path: {'dt', 'pdt', 'mdt'}} - the damage taken he wants in that
-    set (the new set must reach it, even if it costs damage)."""
+    set (the new set must reach it, even if it costs damage). buffs: what's up (wsdist_runner.buff_spec)."""
     import wsdist_runner as W
     known = W.ws_list()
     # weapons to test with: the weapon sets first, then any set that names one
@@ -135,7 +135,7 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
                 continue
             req = W.dt_requirement((targets or {}).get(s['path']))
             info = {}
-            best, dmg, now = W.best_ws_set(job, sub, ws, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info)
+            best, dmg, now = W.best_ws_set(job, sub, ws, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=buffs)
         except Exception as e:                                         # one weapon skill failing doesn't stop the rest
             out.append({'set': s['path'], 'ws': ws, 'error': f'wsdist could not simulate it: {e}'})
             continue
@@ -181,7 +181,7 @@ def is_tp_set(path):
 
 
 def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=1000, enemy='Apex Toad', metric='time',
-                limit=6, targets=None):
+                limit=6, targets=None, buffs=None):
     """[{set, ws: 'TP: <set>', kind: 'tp', now, best, gain, unit, changes, notes}] for TP sets with a better owned set
     (his question 2026-10-30: "it seems to do for weaponskills, but does not do anything for calculating TP").
     The first `limit` TP sets of a file (shortest names first: sets.engaged before sets.engaged.Acc.DW.MidHaste)."""
@@ -202,7 +202,7 @@ def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=
                 continue
             req = W.dt_requirement((targets or {}).get(s['path']))
             info = {}
-            best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=ws_tp, enemy_name=enemy, metric=metric, req=req, info=info)
+            best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=ws_tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=buffs)
             kp, km = info.get('asked') or getattr(W.best_tp_set, 'kept_dt', (0, 0))
             if req:
                 notes = notes + [f'damage taken as you asked (physical {kp:.0f}%, magic {km:.0f}%)']
@@ -280,14 +280,18 @@ def _tp_entry(W, s, label, cur, best, val, now, notes, items, metric, info, req)
 
 
 def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=1500, enemy='Apex Toad', tp_sets=True,
-            ws_tp=1000, tp_metric='time', targets=None):
+            ws_tp=1000, tp_metric='time', targets=None, buffs='none', buffs_custom=None):
     """(sub: one sub job for every file, or {job: sub}; tp / enemy: what wsdist simulates against; targets: {file name:
-    {set path: {'dt', 'pdt', 'mdt'}}} - the damage taken he set for those sets)"""
+    {set path: {'dt', 'pdt', 'mdt'}}} - the damage taken he set for those sets; buffs: 'none' / 'solo' / 'party' /
+    'custom' with his own in buffs_custom - what's up while the sets are judged, saved in the report)"""
     """The whole check-up; saves and returns the report."""
+    import wsdist_runner as W
+    spec = W.buff_spec(buffs, buffs_custom)
     items = checks.Items()
     bags = checks.load_bags(character)
     report = {'character': character, 'time': int(time.time()), 'bags_time': bags.get('_time') if bags else None,
-              'tp': tp, 'enemy': enemy, 'tp_sets': tp_sets, 'ws_tp': ws_tp, 'tp_metric': tp_metric, 'files': []}
+              'tp': tp, 'enemy': enemy, 'tp_sets': tp_sets, 'ws_tp': ws_tp, 'tp_metric': tp_metric, 'buffs': buffs,
+              'buffs_text': W.buff_text(buffs), 'buffs_spec': spec, 'files': []}
     owned_ids = set()
     if bags:
         for b, c in bags.items():
@@ -295,7 +299,6 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
                 owned_ids |= set(c)
     index = None
     if wsdist and bags:
-        import wsdist_runner as W
         if progress:
             progress('loading wsdist')
         index = W.gear_index()
@@ -310,10 +313,10 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
             js = sub.get(job, 'WAR') if isinstance(sub, dict) else sub
             tg = (targets or {}).get(os.path.basename(path)) or {}
             entry['upgrades'] = ws_upgrades(loaded, job, js, owned_ids, items, index, progress=progress, tp=tp, enemy=enemy,
-                                            targets=tg)
+                                            targets=tg, buffs=spec)
             if tp_sets or any(is_tp_set(k) for k in tg):
                 entry['upgrades'] += tp_upgrades(loaded, job, js, owned_ids, items, index, progress=progress, ws_tp=ws_tp,
-                                                 enemy=enemy, metric=tp_metric, targets=tg)
+                                                 enemy=enemy, metric=tp_metric, targets=tg, buffs=spec)
             entry['sub'] = js
         report['files'].append(entry)
     os.makedirs(DATA, exist_ok=True)

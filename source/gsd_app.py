@@ -39,8 +39,9 @@ import features  # noqa: E402
 import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import updater  # noqa: E402
+import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.5.0'
+VERSION = '2.6.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -191,7 +192,9 @@ Words
   Wardrobe   the Mog Wardrobes 1-8: GearSwap equips from them and the inventory, nothing else
   Upgrade    a set wsdist found that does more damage, using only gear this character owns
   wsdist     Kastra's FFXI damage simulator - its numbers are estimates for comparing sets (1500 TP on an Apex Toad,
-             no buffs, unless changed in Settings), not exact in-game damage
+             typical party buffs, unless changed in Settings), not exact in-game damage
+  Buffs      what's up while a set is judged (Settings, or the Buffs list in Build a set). Haste changes a TP set the most:
+             the more haste you have, the less Dual Wield it needs
 """
 MONO = ('Courier New', 10)
 
@@ -224,13 +227,26 @@ def characters():
     return sorted(names, key=lambda n: (n not in reports, n not in have, n))
 
 
+BUFF_HELP = ('What is up while wsdist judges a set. Haste changes a TP set the most: the more haste, the less Dual Wield it needs.\n'
+             'None: nothing.\n'
+             'Solo: food, Haste II and two Marches from trusts.\n'
+             'Typical party: food, Haste II, Dia II on the enemy, Honor and Victory March, Minuet V, Blade Madrigal, '
+             'Chaos and Samurai rolls.\n'
+             'Custom: tick your own.')
+
+
+def buff_key(label):
+    """'Typical party' -> 'party'."""
+    return next((k for k, v in W.BUFF_CHOICES.items() if v == label), 'none')
+
+
 def gs_slot(key):
     return gs_loader.SLOTS.get(str(key).lower())
 
 
 def load_settings():
     d = {'tp': 1500, 'enemy': 'Apex Toad', 'subs': {}, 'daily': True, 'character': None, 'tp_sets': True, 'ws_tp': 1000,
-         'tp_metric': 'time'}
+         'tp_metric': 'time', 'buffs': 'party', 'buffs_custom': W.buff_spec('party')}
     try:
         d.update(json.load(open(SETTINGS, encoding='utf-8')))
     except (OSError, ValueError):
@@ -1680,6 +1696,12 @@ class App(tk.Tk):
                                'weapon skill set: of that weapon skill\'s kind). "As in the file" = the set\'s own weapon, '
                                'else your weapon set. Only for the test: your weapon sets still pick the weapon in game.')
         ToolTip(self.sim_subw, 'The sub slot: a second weapon (dual wield), a shield or a grip - or nothing.')
+        lb = ttk.Label(inp, text='Buffs')
+        lb.grid(row=4, column=0, sticky='w')
+        self.sim_buffs = self._buffs_box(inp)
+        self.sim_buffs.grid(row=4, column=1, sticky='w', padx=4, pady=2)
+        ToolTip(lb, BUFF_HELP)
+        ToolTip(self.sim_buffs, BUFF_HELP)
 
         dtf = ttk.LabelFrame(top, text='2. Damage taken it must have (% less damage)', padding=8)
         dtf.pack(side='left', fill='both', padx=(8, 0))
@@ -1909,6 +1931,7 @@ class App(tk.Tk):
             self.set_dt_target(path, set_path, target)
         who = self.who.get()
         metric = self.cfg.get('tp_metric', 'time')
+        buff_key, buffs = self.sim_buff_choice()
         self.sim_status.config(text='wsdist is working ... (a damage taken target takes longer)' if any(target.values())
                                else 'wsdist is working ...')
         self.progress.config(mode='indeterminate'); self.progress.start(12)
@@ -1927,7 +1950,7 @@ class App(tk.Tk):
                 gear = doctor.with_weapons(next(s['gear'] for s in ld.sets if s['path'] == set_path), target)
                 weapons = [(s['path'], s['gear']) for s in ld.sets if s['path'].startswith('sets.weapons')]
                 req = W.dt_requirement(target)
-                info = {}
+                info = {'buffs': W.buff_text(buff_key)}
                 if doctor.is_tp_set(set_path):
                     tw, main_ws = doctor.tp_weapons(ld)
                     owned, cur, notes = doctor.plan_tp(job, sub, gear, tw, main_ws, owned_ids, items, index)
@@ -1947,13 +1970,13 @@ class App(tk.Tk):
                 best_gear = None
                 if what == 'tp':
                     if find_best:
-                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info)
+                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=buffs)
                     else:
-                        now, dmg = W.tp_set_value(job, sub, cur, ws_tp=tp, enemy_name=enemy, metric=metric, info=info), None
+                        now, dmg = W.tp_set_value(job, sub, cur, ws_tp=tp, enemy_name=enemy, metric=metric, info=info, buffs=buffs), None
                 elif find_best:
-                    best, dmg, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info)
+                    best, dmg, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=buffs)
                 else:
-                    now, dmg = W.set_damage(job, sub, what, cur, tp=tp, enemy_name=enemy, info=info), None
+                    now, dmg = W.set_damage(job, sub, what, cur, tp=tp, enemy_name=enemy, info=info, buffs=buffs), None
                 if dmg is not None:
                     best_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in best.items() if e and e['Name'] != 'Empty'}
                 info['asked'] = req
@@ -1967,6 +1990,8 @@ class App(tk.Tk):
         info = info or {}
         tpset = what == 'tp'
         label = (f'TP set, weapon skill at {tp} TP' if tpset else f'{what} at {tp} TP') + f' on {enemy}'
+        if info.get('buffs'):
+            label += ', ' + info['buffs']
         self.sim_status.config(text=label + (('   (' + '; '.join(notes) + ')') if notes else ''))
         unit = (' s to a WS' if metric == 'time' else ' per round') if tpset else ''
 
@@ -2146,6 +2171,13 @@ class App(tk.Tk):
         self.cfg_enemy.set(self.cfg['enemy'])
         self.cfg_enemy.grid(row=1, column=1, sticky='w', padx=6, pady=2)
         self.cfg_enemy.bind('<Button-1>', lambda e: self.cfg_enemy.configure(values=self.enemy_list))
+        lb = ttk.Label(ws, text='Buffs')
+        lb.grid(row=2, column=0, sticky='w')
+        self.cfg_buffs = self._buffs_box(ws)
+        self.cfg_buffs.grid(row=2, column=1, sticky='w', padx=6, pady=2)
+        ttk.Button(ws, text='Custom buffs...', command=self.open_custom_buffs).grid(row=2, column=2, padx=6)
+        ToolTip(lb, BUFF_HELP)
+        ToolTip(self.cfg_buffs, BUFF_HELP)
         tpf = ttk.LabelFrame(tab, text='TP sets (engaged)', padding=8)
         tpf.pack(fill='x', pady=(8, 0))
         self.cfg_tp_sets = tk.BooleanVar(value=self.cfg.get('tp_sets', True))
@@ -2219,6 +2251,144 @@ class App(tk.Tk):
         self.show_ws()
         threading.Thread(target=self._load_background, daemon=True).start()
 
+    # ------------------------------------------------------------------ buffs: what's up while a set is judged
+    def _buffs_box(self, parent):
+        box = ttk.Combobox(parent, values=list(W.BUFF_CHOICES.values()), width=22, state='readonly')
+        box.set(W.BUFF_CHOICES.get(self.cfg.get('buffs'), W.BUFF_CHOICES['party']))
+        box.bind('<<ComboboxSelected>>', lambda e: box.get() == W.BUFF_CHOICES['custom'] and self.open_custom_buffs())
+        return box
+
+    def sim_buff_choice(self):
+        """The Build a set dropdown: (its choice, what's up)."""
+        key = buff_key(self.sim_buffs.get())
+        return key, W.buff_spec(key, self.cfg.get('buffs_custom'))
+
+    def open_custom_buffs(self):
+        """The Custom buffs: wsdist's own lists, as tick boxes. Saved in the settings, used by Settings and Build a set."""
+        if not updater.installed():
+            messagebox.showinfo('GearSwap Doctor', 'wsdist has to be downloaded first (Settings > Download wsdist now).')
+            return None
+        opts = W.buff_options()
+        spec = self.cfg.get('buffs_custom') or {}
+        w = tk.Toplevel(self)
+        w.title('Custom buffs')
+        w.transient(self)
+        self.buff_vars = v = {'songs': {}, 'rolls': {}, 'bubbles': {}, 'haste': {}, 'dia': {}}
+        self.buff_win = w
+        note = ttk.Label(w, text='Tick what is up in your party. Only what you tick counts.', foreground='#666')
+        note.pack(anchor='w', padx=8, pady=(8, 0))
+        cols = ttk.Frame(w, padding=8)
+        cols.pack(fill='both', expand=True)
+
+        def limit(kind, name):                                  # (no more than wsdist has places for)
+            on = [n for n, b in v[kind].items() if b.get()]
+            if len(on) > W.BUFF_LIMITS[kind]:
+                v[kind][name].set(False)
+                note.config(text=f'{W.BUFF_LIMITS[kind]} {kind} at most: untick one first.')
+
+        def only_one(kind, name):                               # (Haste II replaces Haste, a Dia replaces a Dia)
+            if v[kind][name].get():
+                for n, b in v[kind].items():
+                    if n != name:
+                        b.set(False)
+
+        def bonus(parent, row, label, values, val):
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky='w', pady=(6, 0))
+            cb = ttk.Combobox(parent, values=values, width=7, state='readonly')
+            cb.set(val)
+            cb.grid(row=row, column=1, sticky='w', pady=(6, 0))
+            return cb
+
+        left = ttk.Frame(cols)
+        left.pack(side='left', fill='y', anchor='n')
+        whm = ttk.LabelFrame(left, text='White Magic', padding=6)
+        whm.pack(fill='x')
+        for kind in ('haste', 'dia'):
+            for name in opts[kind]:
+                b = tk.BooleanVar(value=spec.get(kind) == name)
+                v[kind][name] = b
+                ttk.Checkbutton(whm, text=name, variable=b, command=lambda k=kind, n=name: only_one(k, n)).pack(anchor='w')
+        ttk.Label(whm, text='Boost / Gain').pack(anchor='w', pady=(6, 0))
+        self.buff_boost = ttk.Combobox(whm, values=['None'] + opts['boost'], width=16, state='readonly')
+        self.buff_boost.set(spec.get('boost') or 'None')
+        self.buff_boost.pack(anchor='w')
+        oth = ttk.LabelFrame(left, text='Food and Aftermath', padding=6)
+        oth.pack(fill='x', pady=(8, 0))
+        self.buff_food = ttk.Combobox(oth, values=['None'] + opts['food'], width=20, state='readonly')
+        self.buff_food.set(spec.get('food') or 'None')
+        self.buff_food.pack(anchor='w')
+        ttk.Label(oth, text='Aftermath level (Relic, Mythic, Empyrean,\nPrime weapons only)').pack(anchor='w', pady=(6, 0))
+        self.buff_am = ttk.Combobox(oth, values=[0, 1, 2, 3], width=5, state='readonly')
+        self.buff_am.set(spec.get('aftermath', 0))
+        self.buff_am.pack(anchor='w')
+
+        brd = ttk.LabelFrame(cols, text='Songs', padding=6)
+        brd.pack(side='left', fill='y', padx=(8, 0), anchor='n')
+        for i, name in enumerate(opts['songs']):
+            b = tk.BooleanVar(value=name in (spec.get('songs') or []))
+            v['songs'][name] = b
+            ttk.Checkbutton(brd, text=name, variable=b, command=lambda n=name: limit('songs', n)).grid(
+                row=i % 14, column=i // 14 * 2, columnspan=2, sticky='w', padx=(0, 8))
+        self.buff_song_bonus = bonus(brd, 14, 'Songs +', list(range(10)), spec.get('song_bonus', 7))
+
+        cor = ttk.LabelFrame(cols, text='Corsair rolls (and the number rolled)', padding=6)
+        cor.pack(side='left', fill='y', padx=(8, 0), anchor='n')
+        self.buff_roll_no = {}
+        rolls = spec.get('rolls') or {}
+        for i, name in enumerate(opts['rolls']):
+            b = tk.BooleanVar(value=name in rolls)
+            v['rolls'][name] = b
+            ttk.Checkbutton(cor, text=name, variable=b, command=lambda n=name: limit('rolls', n)).grid(row=i, column=0, sticky='w')
+            cb = ttk.Combobox(cor, values=W.ROLL_NUMBERS, width=5, state='readonly')
+            cb.set(rolls.get(name, 'VII'))
+            cb.grid(row=i, column=1, sticky='w', pady=1)
+            self.buff_roll_no[name] = cb
+        n = len(opts['rolls'])
+        self.buff_roll_bonus = bonus(cor, n, 'Rolls +', list(range(9)), spec.get('roll_bonus', 7))
+        self.buff_job_bonus = tk.BooleanVar(value=spec.get('job_bonus', True))
+        ttk.Checkbutton(cor, text='Job bonus (the job of the roll is in the party)', variable=self.buff_job_bonus).grid(
+            row=n + 1, column=0, columnspan=2, sticky='w')
+
+        geo = ttk.LabelFrame(cols, text='Geomancer bubbles', padding=6)
+        geo.pack(side='left', fill='y', padx=(8, 0), anchor='n')
+        for i, name in enumerate(opts['bubbles']):
+            b = tk.BooleanVar(value=name in (spec.get('bubbles') or []))
+            v['bubbles'][name] = b
+            ttk.Checkbutton(geo, text=name, variable=b, command=lambda n=name: limit('bubbles', n)).grid(
+                row=i, column=0, columnspan=2, sticky='w')
+        n = len(opts['bubbles'])
+        self.buff_bubble_bonus = bonus(geo, n, 'Geomancy +', list(range(11)), spec.get('bubble_bonus', 10))
+        self.buff_potency = bonus(geo, n + 1, 'Enemy bubble %', [100, 75, 50, 25], spec.get('bubble_potency', 50))
+        ToolTip(self.buff_potency, 'Frailty and the other bubbles on the enemy are rarely at full strength. wsdist uses 50 %.')
+
+        btns = ttk.Frame(w, padding=(8, 0, 8, 8))
+        btns.pack(fill='x')
+        ttk.Button(btns, text='Use these', style='Big.TButton', command=self.save_custom_buffs).pack(side='left')
+        ttk.Button(btns, text='Cancel', command=w.destroy).pack(side='left', padx=8)
+        return w
+
+    def custom_buffs_now(self):
+        """What the Custom buffs window has ticked, in the form wsdist_runner.buff_stats reads."""
+        v = self.buff_vars
+
+        def one(kind):
+            return next((n for n, b in v[kind].items() if b.get()), None)
+
+        def pick(box):
+            return None if box.get() == 'None' else box.get()
+        spec = {'songs': [n for n, b in v['songs'].items() if b.get()], 'song_bonus': int(self.buff_song_bonus.get()),
+                'rolls': {n: self.buff_roll_no[n].get() for n, b in v['rolls'].items() if b.get()},
+                'roll_bonus': int(self.buff_roll_bonus.get()), 'job_bonus': bool(self.buff_job_bonus.get()),
+                'bubbles': [n for n, b in v['bubbles'].items() if b.get()], 'bubble_bonus': int(self.buff_bubble_bonus.get()),
+                'bubble_potency': int(self.buff_potency.get()), 'haste': one('haste'), 'dia': one('dia'),
+                'boost': pick(self.buff_boost), 'food': pick(self.buff_food), 'aftermath': int(self.buff_am.get())}
+        return spec
+
+    def save_custom_buffs(self):
+        self.cfg['buffs_custom'] = self.custom_buffs_now()
+        save_settings(self.cfg)
+        self.buff_win.destroy()
+
     def save_cfg(self):
         self.cfg['tp'] = int(self.cfg_tp.get())
         self.cfg['enemy'] = self.cfg_enemy.get() or 'Apex Toad'
@@ -2227,6 +2397,8 @@ class App(tk.Tk):
         self.cfg['tp_sets'] = bool(self.cfg_tp_sets.get())
         self.cfg['tp_metric'] = 'damage' if self.cfg_tp_metric.get().startswith('damage') else 'time'
         self.cfg['ws_tp'] = int(self.cfg_ws_tp.get())
+        self.cfg['buffs'] = buff_key(self.cfg_buffs.get())
+        self.sim_buffs.set(self.cfg_buffs.get())
         save_settings(self.cfg)
         messagebox.showinfo('GearSwap Doctor', 'Saved. The next Check now uses them.')
 
@@ -2263,7 +2435,7 @@ class App(tk.Tk):
             self.status.config(text=f'No check-up yet for {self.who.get()} - click Check now')
         else:
             self.status.config(text=f"Checked {ago(r['time'])}  -  bags saved by Steward {ago(r.get('bags_time'))}"
-                                    + (f"  -  wsdist: {r.get('tp', 1500)} TP on {r.get('enemy', 'Apex Toad')}"))
+                                    + (f"  -  wsdist: {r.get('tp', 1500)} TP on {r.get('enemy', 'Apex Toad')}, {r.get('buffs_text', 'no buffs')}"))
 
     def fill_overview(self):
         t = self.files_tree
@@ -2397,7 +2569,7 @@ class App(tk.Tk):
             try:
                 rep = doctor.checkup(who, wsdist=updater.installed(), sub=cfg.get('subs') or 'WAR', tp=cfg.get('tp', 1500), enemy=cfg.get('enemy', 'Apex Toad'),
                                      tp_sets=cfg.get('tp_sets', True), ws_tp=cfg.get('ws_tp', 1000), tp_metric=cfg.get('tp_metric', 'time'),
-                                     targets=cfg.get('dt_targets') or {},
+                                     targets=cfg.get('dt_targets') or {}, buffs=cfg.get('buffs', 'party'), buffs_custom=cfg.get('buffs_custom'),
                                      progress=lambda m: self.after(0, lambda: self.status.config(text=m + ' ...')))
                 self.after(0, lambda: self._done(rep, who))
             except Exception as e:
@@ -2582,9 +2754,9 @@ def selftest(out_path):
         for who in chars:
             files = [f for f in doctor.files_for(who) if checks.job_of(f) in ('BLU', 'PLD', 'WAR', 'SAM', 'DRK', 'THF', 'DNC', 'COR')]
             if files and checks.load_bags(who):
-                rep = doctor.checkup(who, files=files[:1])
+                rep = doctor.checkup(who, files=files[:1], buffs='party')
                 f = rep['files'][0]
-                out['checkup'] = {'sets': f['sets'], 'problems': len(f['problems']), 'upgrades': len(f['upgrades']),
+                out['checkup'] = {'buffs': rep['buffs_text'], 'sets': f['sets'], 'problems': len(f['problems']), 'upgrades': len(f['upgrades']),
                                   'tp_sets': [(u['ws'], u.get('now'), u.get('best')) for u in f['upgrades'] if u.get('kind') == 'tp'],
                                   'errors': [u['error'] for u in f['upgrades'] if 'error' in u][:3]}
                 break
