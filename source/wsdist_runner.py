@@ -68,13 +68,19 @@ def _wsdist():
     return _mods
 
 
+_GIDX = None
+
+
 def gear_index():
     """{lower-case item name: [wsdist gear entries]} - several entries when wsdist lists augment paths / ranks."""
-    g = _wsdist()['gear']
-    out = {}
-    for e in g.all_gear.values():
-        out.setdefault(e['Name'].lower(), []).append(e)
-    return out
+    global _GIDX
+    if _GIDX is None:
+        g = _wsdist()['gear']
+        out = {}
+        for e in g.all_gear.values():
+            out.setdefault(e['Name'].lower(), []).append(e)
+        _GIDX = out
+    return _GIDX
 
 
 def pick_variant(entries, augments=None):
@@ -124,15 +130,75 @@ def _enemy(enemy_name):
 TP_METRICS = {'time': 'Time to WS', 'damage': 'Damage dealt'}
 
 
+def dt_of(player):
+    """(physical, magic) damage taken of a wsdist player, as wsdist counts it: DT counts for both, each capped at -50 %,
+    then the uncapped PDT2 / MDT2 / DT2 (negative numbers: -50 = takes 50 % less)."""
+    st = player.stats
+    pdt = max(-50, st.get('PDT', 0) + st.get('DT', 0)) + st.get('PDT2', 0) + st.get('DT2', 0)
+    mdt = max(-50, st.get('MDT', 0) + st.get('DT', 0)) + st.get('MDT2', 0) + st.get('DT2', 0)
+    return round(pdt, 1), round(mdt, 1)
+
+
+def dt_requirement(target):
+    """His numbers for a set ({'dt': 30, 'pdt': 50, 'mdt': 0}, as "% less damage") -> wsdist's (PDT, MDT) requirement
+    (-50, -30): DT counts for both physical and magic. None when nothing is asked."""
+    if not target:
+        return None
+    dt, p, m = (abs(float(target.get(k) or 0)) for k in ('dt', 'pdt', 'mdt'))
+    if not (dt or p or m):
+        return None
+    return -min(50.0, max(dt, p)), -min(50.0, max(dt, m))
+
+
+def _dt_score(it, need_p, need_m):
+    """How much damage taken an item takes off where it's still needed (higher = more)."""
+    p = -(it.get('PDT', 0) + it.get('DT', 0) + it.get('PDT2', 0) + it.get('DT2', 0))
+    m = -(it.get('MDT', 0) + it.get('DT', 0) + it.get('MDT2', 0) + it.get('DT2', 0))
+    return (p if need_p else 0) + (m if need_m else 0)
+
+
+def dt_start(cp, job, sub, ml, start, check, req, abilities):
+    """A starting set for a damage taken target: the set as it is when it has it already; otherwise the gear with the
+    most damage taken goes into the slots (weapons stay). Returns (start, the target it can reach): when his gear can't
+    reach the target, the most it can - wsdist then looks for the best set with that."""
+    player = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+    p, m = dt_of(player)
+    if p <= req[0] + 0.01 and m <= req[1] + 0.01:
+        return start, req
+    new = dict(start)
+    for _ in range(2):                                      # (twice: after the first pass, one of the two may be met)
+        need_p, need_m = p > req[0] + 0.01, m > req[1] + 0.01
+        if not (need_p or need_m):
+            break
+        taken = {}
+        for slot in ('ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet'):
+            pair = {'ear1': 'ear2', 'ear2': 'ear1', 'ring1': 'ring2', 'ring2': 'ring1'}.get(slot)
+            best = new.get(slot)
+            best_s = _dt_score(best, need_p, need_m) if best else 0
+            for it in check.get(slot, []):
+                if pair and it.get('Name2') == (new.get(pair) or {}).get('Name2') or it.get('Name') == taken.get(pair):
+                    continue
+                sc = _dt_score(it, need_p, need_m)
+                if sc > best_s:
+                    best, best_s = it, sc
+            if best is not None:
+                new[slot] = best
+                taken[slot] = best.get('Name')
+        player = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(new), buffs={}, abilities=abilities)
+        p, m = dt_of(player)
+    return new, (max(req[0], p), max(req[1], m))
+
+
 def _tp_value(out, metric):
     """What to show for a TP set: seconds to the weapon skill, or damage per attack round."""
     return out[0] if metric == 'time' else out[1][0]
 
 
-def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20):
+def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None):
     """The best TP (engaged) set from the owned gear (wsdist's "attack round" - Melee TP set). metric 'time': the
     seconds of auto-attacks from 0 TP to ws_tp (lower is better); 'damage': damage per attack round. Returns (best
-    {slot: entry}, best value, current value)."""
+    {slot: entry}, best value, current value). req: (PDT, MDT) the new set must reach (his numbers, dt_requirement);
+    None = at least what the set has now. info (a dict) gets the damage taken: now / best / asked."""
     mods = _wsdist()
     cp, ws_mod, act = mods['create_player'], mods['wsdist'], mods['actions']
     enemy = _enemy(enemy_name)
@@ -160,20 +226,46 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             now = act.average_attack_round(player0, enemy, 0, ws_tp, m)
             # keep the set's damage taken: a TP.DT set made "faster" by dropping its DT gear would be no use - the new
             # set must have at least the physical / magic DT the set has now (wsdist's PDT / MDT requirement)
-            st = player0.stats
-            pdt = max(-50, st.get('PDT', 0) + st.get('DT', 0)) + st.get('PDT2', 0) + st.get('DT2', 0)
-            mdt = max(-50, st.get('MDT', 0) + st.get('DT', 0)) + st.get('MDT2', 0) + st.get('DT2', 0)
-            req_p, req_m = min(0, pdt), min(0, mdt)
+            pdt, mdt = dt_of(player0)
+            req_p, req_m = req if req else (min(0, pdt), min(0, mdt))
+            first = start
+            if req:
+                first, (req_p, req_m) = dt_start(cp, job, sub, ml, start, check, req, abilities)
             best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, {}, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
-                                       check, dict(start), req_p, req_m, m, False, 0)
+                                       check, dict(first), req_p, req_m, m, False, 0)
             after = act.average_attack_round(best, enemy, 0, ws_tp, m)
+            dt_best = dt_of(best)
     finally:
         os.chdir(cwd)
-    best_tp_set.kept_dt = (req_p, req_m)
+    best_tp_set.kept_dt = (req_p, req_m) if not req else req
+    if info is not None:
+        info.update({'now': (pdt, mdt), 'best': dt_best, 'asked': req, 'kept': not req})
     return best.gearset, _tp_value(after, metric), _tp_value(now, metric)
 
 
-def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20):
+def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, info=None):
+    """A TP set as it is: seconds to the weapon skill (or damage per round); info gets its damage taken."""
+    mods = _wsdist()
+    cp, act = mods['create_player'], mods['actions']
+    enemy = _enemy(enemy_name)
+    empty = mods['gear'].Empty
+    start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
+    abilities = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': 0, 'Storm spell': 'None', 'Enhancing Skill': 0,
+                 'Verbose Swaps': False}
+    cwd = os.getcwd()
+    os.chdir(WS_DIR)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
+            now = act.average_attack_round(player0, enemy, 0, ws_tp, TP_METRICS.get(metric, 'Time to WS'))
+            if info is not None:
+                info['now'] = dt_of(player0)
+    finally:
+        os.chdir(cwd)
+    return _tp_value(now, metric)
+
+
+def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20, info=None):
     """The average damage of one weapon skill with this set (wsdist's Quicklook), or raises."""
     mods = _wsdist()
     cp, act = mods['create_player'], mods['actions']
@@ -188,14 +280,17 @@ def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20):
         with contextlib.redirect_stdout(io.StringIO()):
             player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
             now = act.average_ws(player0, enemy, ws, tp, 'melee', 'Damage dealt')
+            if info is not None:
+                info['now'] = dt_of(player0)
     finally:
         os.chdir(cwd)
     return now[1][0]
 
 
-def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', ml=20):
+def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', ml=20, req=None, info=None):
     """owned: {wsdist slot: [entries]}; current: {wsdist slot: entry}. Returns (best {slot: entry}, best damage,
-    current damage) or raises."""
+    current damage) or raises. req: (PDT, MDT) the new set must reach (dt_requirement), None = no damage taken asked.
+    info (a dict) gets the damage taken: now / best / asked."""
     mods = _wsdist()
     cp, en, ws_mod, act = mods['create_player'], mods['enemies'], mods['wsdist'], mods['actions']
     e = dict(en.preset_enemies[enemy_name])
@@ -225,11 +320,19 @@ def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', m
         with contextlib.redirect_stdout(io.StringIO()):
             player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs={}, abilities=abilities)
             now = act.average_ws(player0, enemy, ws, tp, 'melee', 'Damage dealt')
+            dt_now = dt_of(player0)
+            rp, rm = req if req else (0, 0)
+            first = start
+            if req:
+                first, (rp, rm) = dt_start(cp, job, sub, ml, start, check, req, abilities)
             best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, {}, abilities, enemy, ws, 'None', 'weapon skill', tp,
-                                       check, dict(start), 0, 0, 'Damage dealt', False, 0)
+                                       check, dict(first), rp, rm, 'Damage dealt', False, 0)
             after = act.average_ws(best, enemy, ws, tp, 'melee', 'Damage dealt')
+            dt_best = dt_of(best)
     finally:
         os.chdir(cwd)
+    if info is not None:
+        info.update({'now': dt_now, 'best': dt_best, 'asked': req})
     return best.gearset, after[1][0], now[1][0]
 
 

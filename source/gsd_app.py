@@ -11,7 +11,9 @@ Tabs
   Problems     what's wrong (broken / misspelled / wrong slot / wrong job / not owned / in storage), filter by kind
   Upgrades     wsdist's better weapon skill sets, your set and the better one side by side in the equipment grid
   Sets         every set in every file, in the equipment grid, its problems marked
-  Simulate     wsdist on one weapon skill set: its damage, and the best set from your gear (TP, enemy, sub job)
+  Build a set  one weapon skill or TP set: the weapon (main / sub) and the damage taken, physical and magic damage
+               taken it must have; wsdist builds the best set from your gear that has them - put it in the set or
+               save it as a new set. The numbers are remembered per set and the check-ups use them
   My gear      what the character owns (Steward's saved copy), by bag, with a search
   Backups      every backup GearSwap Doctor made; put one back
   Settings     characters, sub job per job, TP and enemy for the check-ups, the daily check
@@ -19,6 +21,7 @@ Nothing in a GearSwap file changes without a click; each change is backed up fir
 """
 import glob
 import json
+import re
 import os
 import shutil
 import sys
@@ -37,7 +40,7 @@ import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = '2.4.0'
+VERSION = '2.5.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -53,6 +56,7 @@ SLOT_TEXT = {'main': 'Main', 'sub': 'Sub', 'range': 'Range', 'ammo': 'Ammo', 'he
 JOBS = ['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU',
         'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN']
 OFF, ON = '☐', '☑'
+WPN_AUTO = '(as in the file)'
 
 # How much each kind matters, and what it means / what to do, in plain words (his request 2026-10-30: "gearswap doctor
 # gui is not very user friendly and hard to understand. add in more things to help the user make decisions")
@@ -120,6 +124,31 @@ def gain_words(u):
     return f"average damage for {u['ws']}"
 
 
+def verdict_u(u):
+    """verdict() of an upgrade - or "Gets your DT" when it is there for the damage taken he asked for."""
+    if u.get('dt_fix') and u.get('gain', 0) < 1:
+        return 'Gets your DT'
+    return verdict(u.get('gain', 0))
+
+
+def gain_text(u):
+    return f"{u.get('gain', 0):+.1f}%"
+
+
+def dt_words(u):
+    """'Damage taken: physical -12% -> -50%, magic -5% -> -31% (you asked -50 / -30)' for an upgrade."""
+    if 'dt_now' not in u:
+        return ''
+    (pn, mn), (pb, mb) = u['dt_now'], u['dt_best']
+    out = f"Damage taken: physical {pn:.0f}% -> {pb:.0f}%, magic {mn:.0f}% -> {mb:.0f}%"
+    if u.get('dt_asked'):
+        pa, ma = u['dt_asked']
+        out += f"  (you asked {pa:.0f}% / {ma:.0f}%" + (')' if u.get('dt_met') else " - the most your gear reaches)")
+        if u.get('dt_fix') and u.get('gain', 0) < 0:
+            out += f"\nIt reaches your damage taken; that costs {-u['gain']:.1f}% {'speed' if u.get('kind') == 'tp' else 'damage'}."
+    return out
+
+
 def verdict(gain):
     """How worth it an upgrade is, in words."""
     if gain >= 15:
@@ -145,7 +174,12 @@ GUIDE = """How to use GearSwap Doctor
 
 4. In game, type //gs reload (or change job) to use the new sets.
 
-5. "Add features" adds things to a GearSwap file that it may not do yet: Doom gear that goes on by itself, the
+5. "Build a set" makes a set the way you want it: pick a weapon skill or TP set, the weapon to use (main and sub),
+   and how much damage taken (DT), physical (PDT) and magic damage taken (MDT) it must have. wsdist builds the best
+   set from your own gear that has them. "Put it in this set" or "Save it as a new set". Tick "Remember" and the
+   check-ups keep to those numbers for that set from then on.
+
+6. "Add features" adds things to a GearSwap file that it may not do yet: Doom gear that goes on by itself, the
    Hachirin-no-Obi on the right day / weather, Treasure Hunter tagging, a DT key, movement speed gear when you run,
    a Moonshade swap at high TP, Warp / experience ring commands, and more. ★ marks the ones suggested for that job
    and your gear. Tick them, pick the options (your gear is in the lists), then "Add ticked features to this file".
@@ -399,7 +433,7 @@ class App(tk.Tk):
             names = W.enemies()
             self.after(0, lambda: self._ws_loaded(names))
         except Exception as e:
-            self.after(0, lambda: self.sim_status.config(text=f'wsdist could not load: {e}'))
+            self.after(0, lambda e=e: self.sim_status.config(text=f'wsdist could not load: {e}'))
 
     def _ws_loaded(self, names):
         self.ws_ready = True
@@ -538,6 +572,10 @@ class App(tk.Tk):
         b2.pack(side='right', padx=6)
         ttk.Button(b2, text='Apply ticked upgrades', command=lambda: self.do_job_part(self.cur_job, 'up')).pack(fill='x')
         ttk.Button(b2, text='See in the gear grid', command=self._job_up_grid).pack(fill='x', pady=(4, 0))
+        bdt = ttk.Button(b2, text='Set its damage taken...', command=self._job_up_dt)
+        bdt.pack(fill='x', pady=(4, 0))
+        ToolTip(bdt, 'Opens Build a set with this set picked: type how much damage taken, physical and magic damage '
+                     'taken it must have, and wsdist builds the best set from your gear that has it.')
         self.jt_up_text = self._textbox(self.job_frame, 6)
         self.jt_up_text.pack(fill='x')
 
@@ -594,7 +632,7 @@ class App(tk.Tk):
                     if p['kind'] == 'unknown' and p.get('fix'):
                         self.job_ticks.add(('r', f['path'], p['item']))
                 for u in f['upgrades']:
-                    if 'error' not in u and 5 <= u['gain'] <= 100:
+                    if 'error' not in u and (5 <= u['gain'] <= 100 or u.get('dt_fix')):
                         self.job_ticks.add(('u', f['path'], u['set']))
         sel = 'job:' + keep if keep and t.exists('job:' + keep) else '__all__'
         t.selection_set(sel)
@@ -648,7 +686,7 @@ class App(tk.Tk):
                     continue
                 key = ('u', f['path'], u['set'])
                 row = self.jt_up.insert('', 'end', text=f"{self._box(key)} {u['ws']}",
-                                        values=(f"+{u['gain']}%", verdict(u['gain']) + (' ⚑' if u['gain'] > 100 else ''),
+                                        values=(gain_text(u), verdict_u(u) + (' ⚑' if u['gain'] > 100 else ''),
                                                 len(u['changes']), nowbest(u)),
                                         tags=('big' if u['gain'] >= 15 else 'small' if u['gain'] < 5 else '',))
                 self.job_rowkey[('up', row)] = (key, (f['path'], ('slots', u['set'], u['changes'])), u)
@@ -706,14 +744,32 @@ class App(tk.Tk):
         key, (path, edit), u = rec
         now = self.set_gear(path, u['set'])
         where = self.item_bags()
-        lines = [f"{verdict(u['gain'])}: +{u['gain']}% {gain_words(u)} ({nowbest(u)})  -  "
+        lines = [f"{verdict_u(u)}: {gain_text(u)} {gain_words(u)} ({nowbest(u)})  -  "
                  f"{os.path.basename(path)}, {u['set']}"]
+        if dt_words(u):
+            lines.append(dt_words(u))
         for slot, new in u['changes'].items():
             bag = where.get(new.lower())
             lines.append(f"  {SLOT_TEXT.get(slot, slot):<7} {now.get(slot) or '(empty)'}  ->  {new}" + (f"   (in your {bag})" if bag else ''))
         if u['gain'] > 100:
             lines.append(BIG_GAIN_NOTE)
         self._say(self.jt_up_text, '\n'.join(lines))
+
+    def _job_up_dt(self):
+        sel = self.jt_up.selection()
+        rec = self.job_rowkey.get(('up', sel[0])) if sel else None
+        if rec:
+            self.open_build(rec[1][0], rec[2]['set'])
+        else:
+            self.open_build(None, None)
+
+    def _upg_dt(self):
+        sel = self.upg.selection()
+        u = self.info.get(('u', sel[0])) if sel else None
+        if u and sel[0] in self.rows:
+            self.open_build(self.rows[sel[0]][0], u['set'])
+        else:
+            self.open_build(None, None)
 
     def _job_up_grid(self):
         sel = self.jt_up.selection()
@@ -821,7 +877,7 @@ class App(tk.Tk):
         # 3. upgrades
         for f, u in ups[:3]:
             n = len(u['changes'])
-            self._card('good', f"{u['ws']}: {verdict(u['gain']).lower()} (+{u['gain']}% {'faster to a weapon skill' if u.get('kind') == 'tp' else 'damage'}) in {f['file']}",
+            self._card('good', f"{u['ws']}: {verdict_u(u).lower()} ({gain_text(u)} {'faster to a weapon skill' if u.get('kind') == 'tp' else 'damage'}) in {f['file']}",
                        f"wsdist found a better set from gear you already own: {n} item(s) change "
                        f"({', '.join(list(u['changes'].values())[:4])}{' ...' if n > 4 else ''}). {'Time to a weapon skill' if u.get('kind') == 'tp' else 'Average damage'}: {nowbest(u)}."
                        + (' ' + BIG_GAIN_NOTE if u['gain'] > 100 else ''),
@@ -1405,7 +1461,10 @@ class App(tk.Tk):
         self.grid_best.pack(fill='x')
         self.upg_text = self._textbox(right, 9)
         self.upg_text.pack(fill='x', pady=(6, 0))
-        ttk.Label(right, text='Green = a swap. Tick the weapon skill on the left, then Apply ticked.', foreground='#666').pack(anchor='w')
+        ub = ttk.Frame(right)
+        ub.pack(fill='x')
+        ttk.Label(ub, text='Green = a swap. Tick the weapon skill on the left, then Apply ticked.', foreground='#666').pack(side='left')
+        ttk.Button(ub, text='Set its damage taken...', command=self._upg_dt).pack(side='right')
         pw.add(right, weight=3)
 
     def show_upgrade(self):
@@ -1420,17 +1479,20 @@ class App(tk.Tk):
         best = dict(now)
         best.update(u['changes'])
         marks = {s: '#c8efc0' for s in u['changes']}
-        self.upg_head.config(text=f"{u['ws']:<22} now {u['now']:>6}   best {u['best']:>6}   +{u['gain']}%")
+        self.upg_head.config(text=f"{u['ws']:<22} now {u['now']:>6}   best {u['best']:>6}   {gain_text(u)}")
         self.grid_now.show(now, {s: '#fbe3c4' for s in u['changes']})
         self.grid_best.show(best, marks)
         where = self.item_bags()
-        lines = [f"{verdict(u['gain'])}: +{u['gain']}% {gain_words(u)} ({nowbest(u)}), "
-                 f"{len(u['changes'])} item(s) change - all gear this character already owns.", '', 'The swaps:']
+        lines = [f"{verdict_u(u)}: {gain_text(u)} {gain_words(u)} ({nowbest(u)}), "
+                 f"{len(u['changes'])} item(s) change - all gear this character already owns."]
+        if dt_words(u):
+            lines.append(dt_words(u))
+        lines += ['', 'The swaps:']
         for slot, new in u['changes'].items():
             old = now.get(slot) or '(empty)'
             bag = where.get(new.lower())
             lines.append(f"  {SLOT_TEXT.get(slot, slot):<7} {old}  ->  {new}" + (f"   (it's in your {bag})" if bag else ''))
-        if u['gain'] < 5:
+        if 0 <= u['gain'] < 5 and not u.get('dt_fix'):
             lines.append('')
             lines.append('A small gain: worth it only if you use this weapon skill a lot.')
         if u['gain'] > 100:
@@ -1479,7 +1541,7 @@ class App(tk.Tk):
         ttk.Label(sim, text='TP').pack(side='left', padx=(8, 0))
         self.set_tp = tk.IntVar(value=self.cfg['tp'])
         ttk.Spinbox(sim, from_=1000, to=3000, increment=100, textvariable=self.set_tp, width=6).pack(side='left', padx=4)
-        ttk.Button(sim, text='Send to Simulate', command=self.set_to_sim).pack(side='left', padx=8)
+        ttk.Button(sim, text='Build it with damage taken...', command=self.set_to_sim).pack(side='left', padx=8)
         self.set_text = self._textbox(right, 6)
         self.set_text.pack(fill='both', expand=True, pady=(6, 0))
         ttk.Label(right, text='Red = broken or misspelled, orange = wrong slot / job, blue = not owned or in storage.',
@@ -1557,8 +1619,10 @@ class App(tk.Tk):
         self.sim_file.set(os.path.basename(path))
         self.sim_file_changed()
         self.sim_set.set(set_path)
+        self.sim_set_changed()
         self.sim_enemy.set(self.set_enemy.get())
-        self.sim_tp.set(self.set_tp.get())
+        if not doctor.is_tp_set(set_path):
+            self.sim_tp.set(self.set_tp.get())
 
     def _report_file(self, path):
         for f in (self.report or {}).get('files', []):
@@ -1567,19 +1631,27 @@ class App(tk.Tk):
         return None
 
     # ------------------------------------------------------------------ Simulate
+    # His request 2026-10-30: "the user should be able to dictate how much damage taken, magic damage taken, physical
+    # damage taken should be in each set. there is no way to get input to make the new gearsets". Build a set: pick a
+    # weapon skill or TP set, type the damage taken it must have, wsdist builds the best set from his gear that has it;
+    # put it in that set or save it as a new set. The numbers are remembered per set and the check-ups use them too.
     def _simulate_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
         self.tab_sim = tab
-        self.nb.add(tab, text='Simulate')
-        inp = ttk.LabelFrame(tab, text='Inputs', padding=8)
-        inp.pack(fill='x')
+        self.nb.add(tab, text='Build a set')
+        top = ttk.Frame(tab)
+        top.pack(fill='x')
+        inp = ttk.LabelFrame(top, text='1. The set', padding=8)
+        inp.pack(side='left', fill='both', expand=True)
+        top.columnconfigure(0, weight=1)
         ttk.Label(inp, text='File').grid(row=0, column=0, sticky='w')
         self.sim_file = ttk.Combobox(inp, width=30, state='readonly')
         self.sim_file.grid(row=0, column=1, sticky='w', padx=4, pady=2)
         self.sim_file.bind('<<ComboboxSelected>>', lambda e: self.sim_file_changed())
-        ttk.Label(inp, text='Weapon skill set').grid(row=1, column=0, sticky='w')
+        ttk.Label(inp, text='Set').grid(row=1, column=0, sticky='w')
         self.sim_set = ttk.Combobox(inp, width=50, state='readonly')
         self.sim_set.grid(row=1, column=1, columnspan=3, sticky='w', padx=4, pady=2)
+        self.sim_set.bind('<<ComboboxSelected>>', lambda e: self.sim_set_changed())
         ttk.Label(inp, text='Sub job').grid(row=0, column=2, sticky='w', padx=(16, 0))
         self.sim_sub = ttk.Combobox(inp, values=JOBS, width=6, state='readonly')
         self.sim_sub.set('WAR')
@@ -1588,24 +1660,74 @@ class App(tk.Tk):
         self.sim_enemy = ttk.Combobox(inp, values=self.enemy_list, width=30, state='readonly')
         self.sim_enemy.set(self.cfg['enemy'])
         self.sim_enemy.grid(row=2, column=1, sticky='w', padx=4, pady=2)
-        ttk.Label(inp, text='TP').grid(row=2, column=2, sticky='w', padx=(16, 0))
+        self.sim_tp_label = ttk.Label(inp, text='TP')
+        self.sim_tp_label.grid(row=2, column=2, sticky='w', padx=(16, 0))
         self.sim_tp = tk.IntVar(value=self.cfg['tp'])
         tp = ttk.Frame(inp)
         tp.grid(row=2, column=3, sticky='w')
         ttk.Scale(tp, from_=1000, to=3000, variable=self.sim_tp, length=180,
                   command=lambda v: self.sim_tp.set(int(round(float(v) / 50) * 50))).pack(side='left')
         ttk.Label(tp, textvariable=self.sim_tp, font=MONO, width=5).pack(side='left', padx=4)
+        ttk.Label(inp, text='Main weapon').grid(row=3, column=0, sticky='w')
+        self.sim_main = ttk.Combobox(inp, width=30, state='readonly', values=[WPN_AUTO])
+        self.sim_main.set(WPN_AUTO)
+        self.sim_main.grid(row=3, column=1, sticky='w', padx=4, pady=2)
+        ttk.Label(inp, text='Sub').grid(row=3, column=2, sticky='w', padx=(16, 0))
+        self.sim_subw = ttk.Combobox(inp, width=26, state='readonly', values=[WPN_AUTO])
+        self.sim_subw.set(WPN_AUTO)
+        self.sim_subw.grid(row=3, column=3, sticky='w', padx=4)
+        ToolTip(self.sim_main, 'The weapon wsdist builds the set for - any weapon you own that this job can use (for a '
+                               'weapon skill set: of that weapon skill\'s kind). "As in the file" = the set\'s own weapon, '
+                               'else your weapon set. Only for the test: your weapon sets still pick the weapon in game.')
+        ToolTip(self.sim_subw, 'The sub slot: a second weapon (dual wield), a shield or a grip - or nothing.')
+
+        dtf = ttk.LabelFrame(top, text='2. Damage taken it must have (% less damage)', padding=8)
+        dtf.pack(side='left', fill='both', padx=(8, 0))
+        self.sim_dt = {}
+        for i, (k, label, tip) in enumerate((
+                ('dt', 'Damage taken (DT)', 'Counts for both physical and magic damage, like DT gear does.'),
+                ('pdt', 'Physical damage taken (PDT)', 'From weapons and physical TP moves.'),
+                ('mdt', 'Magic damage taken (MDT)', 'From spells and magic TP moves.'))):
+            lb = ttk.Label(dtf, text=label)
+            lb.grid(row=i, column=0, sticky='w')
+            ToolTip(lb, tip)
+            v = tk.IntVar(value=0)
+            ttk.Spinbox(dtf, from_=0, to=50, increment=1, textvariable=v, width=5).grid(row=i, column=1, sticky='w', padx=4, pady=1)
+            ttk.Label(dtf, text='%').grid(row=i, column=2, sticky='w')
+            self.sim_dt[k] = v
+        self.sim_dt_hint = ttk.Label(dtf, text='', foreground='#666', wraplength=300, justify='left')
+        self.sim_dt_hint.grid(row=3, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        self.sim_remember = tk.BooleanVar(value=True)
+        ttk.Checkbutton(dtf, text='Remember for this set (the check-ups use it too)', variable=self.sim_remember).grid(
+            row=4, column=0, columnspan=3, sticky='w', pady=(4, 0))
+
+        mine = ttk.LabelFrame(top, text='Damage taken you set', padding=6)
+        mine.pack(side='left', fill='both', padx=(8, 0))
+        self.dt_list = ttk.Treeview(mine, columns=('dt',), show='tree headings', height=5, selectmode='browse')
+        self.dt_list.heading('#0', text='Set')
+        self.dt_list.column('#0', width=150, stretch=True)
+        self.dt_list.heading('dt', text='DT/PDT/MDT')
+        self.dt_list.column('dt', width=80, stretch=False, anchor='center')
+        self.dt_list.pack(fill='both', expand=True)
+        self.dt_list.bind('<<TreeviewSelect>>', lambda e: self._dt_pick())
+        ttk.Button(mine, text='Forget the picked one', command=self._dt_forget).pack(anchor='w', pady=(4, 0))
+
         btns = ttk.Frame(tab)
         btns.pack(fill='x', pady=6)
-        ttk.Button(btns, text='Damage of this set', style='Big.TButton', command=lambda: self.simulate(False)).pack(side='left')
-        ttk.Button(btns, text='Find the best set from my gear', style='Big.TButton', command=lambda: self.simulate(True)).pack(side='left', padx=8)
-        self.sim_apply_btn = ttk.Button(btns, text='Put the best set in the file', command=self.sim_apply, state='disabled')
+        ttk.Button(btns, text='How this set does now', style='Big.TButton', command=lambda: self.simulate(False)).pack(side='left')
+        b = ttk.Button(btns, text='3. Build the best set from my gear', style='Big.TButton', command=lambda: self.simulate(True))
+        b.pack(side='left', padx=8)
+        ToolTip(b, 'wsdist tries your gear (inventory and wardrobes) and keeps the set that does the most damage (weapon '
+                   'skill) or gets TP the fastest (TP set) while having at least the damage taken you typed.')
+        self.sim_apply_btn = ttk.Button(btns, text='Put it in this set', command=self.sim_apply, state='disabled')
         self.sim_apply_btn.pack(side='left', padx=8)
-        self.sim_status = ttk.Label(btns, text='Loading wsdist ...')
+        self.sim_new_btn = ttk.Button(btns, text='Save it as a new set...', command=self.sim_save_new, state='disabled')
+        self.sim_new_btn.pack(side='left')
+        self.sim_status = ttk.Label(btns, text='Loading wsdist ...', wraplength=420, justify='left')
         self.sim_status.pack(side='left', padx=8)
         res = ttk.LabelFrame(tab, text='Results', padding=8)
         res.pack(fill='both', expand=True)
-        self.sim_result = ttk.Label(res, text='', font=('Courier New', 11))
+        self.sim_result = ttk.Label(res, text='', font=('Courier New', 11), justify='left')
         self.sim_result.pack(anchor='w', pady=(0, 6))
         grids = ttk.Frame(res)
         grids.pack(fill='both', expand=True)
@@ -1614,6 +1736,78 @@ class App(tk.Tk):
         self.sim_grid_best = GearGrid(grids, 'Best from your gear', lambda: self.items)
         self.sim_grid_best.pack(side='left', fill='both', expand=True)
         self.sim_best = None
+        self.sim_best_gear = None
+        self.fill_dt_list()
+
+    # the damage taken he set: settings 'dt_targets' = {file name: {set path: {'dt', 'pdt', 'mdt'(, 'main', 'sub')}}}
+    def dt_target(self, path, set_path):
+        return ((self.cfg.get('dt_targets') or {}).get(os.path.basename(path or '')) or {}).get(set_path)
+
+    def set_dt_target(self, path, set_path, t):
+        allt = self.cfg.setdefault('dt_targets', {})
+        f = allt.setdefault(os.path.basename(path), {})
+        if t and any(t.get(k) for k in ('dt', 'pdt', 'mdt', 'main', 'sub')):
+            f[set_path] = {k: int(t.get(k) or 0) for k in ('dt', 'pdt', 'mdt')}
+            for k in ('main', 'sub'):
+                if t.get(k):
+                    f[set_path][k] = t[k]
+        else:
+            f.pop(set_path, None)
+        if not f:
+            allt.pop(os.path.basename(path), None)
+        save_settings({'dt_targets': allt})
+        self.fill_dt_list()
+
+    def fill_dt_list(self):
+        t = self.dt_list
+        t.delete(*t.get_children())
+        self._dt_rows = {}
+        mine = {os.path.basename(f) for f in doctor.files_for(self.who.get())}
+        for fname, sets_ in sorted((self.cfg.get('dt_targets') or {}).items()):
+            if fname not in mine:
+                continue
+            for sp, v in sorted(sets_.items()):
+                wpn = ' / '.join(x for x in (v.get('main'), v.get('sub')) if x)
+                row = t.insert('', 'end', text=f"{fname.split('_', 1)[-1][:-4]}  {sp[5:]}" + (f'  ({wpn})' if wpn else ''),
+                               values=(f"{v.get('dt', 0)} / {v.get('pdt', 0)} / {v.get('mdt', 0)}",))
+                self._dt_rows[row] = (fname, sp)
+
+    def _dt_pick(self):
+        sel = self.dt_list.selection()
+        if sel and sel[0] in self._dt_rows:
+            fname, sp = self._dt_rows[sel[0]]
+            self.open_build(os.path.join(doctor.GS_DATA, fname), sp, switch=False)
+
+    def _dt_forget(self):
+        sel = self.dt_list.selection()
+        if sel and sel[0] in self._dt_rows:
+            fname, sp = self._dt_rows[sel[0]]
+            self.set_dt_target(fname, sp, None)
+            if self.sim_set.get() == sp:
+                for v in self.sim_dt.values():
+                    v.set(0)
+
+    def open_build(self, path, set_path, switch=True):
+        """Build a set, with this file and set picked (and the damage taken he set for it)."""
+        if path:
+            name = os.path.basename(path)
+            if name in (self.sim_file.cget('values') or ()):
+                self.sim_file.set(name)
+                self.sim_file_changed()
+            if set_path and set_path in (self.sim_set.cget('values') or ()):
+                self.sim_set.set(set_path)
+                self.sim_set_changed()
+        if switch:
+            self.nb.select(self.tab_sim)
+
+    def _sim_sets(self, ld):
+        import wsdist_runner as W
+        known = W.ws_list() if self.ws_ready else None
+        ws = [s['path'] for s in ld.sets if '.WS' in s['path'] or 'WS[' in s['path']]
+        if known:
+            ws = [p_ for p_ in ws if doctor.ws_of(p_, known)] or ws
+        tp = sorted((s['path'] for s in ld.sets if doctor.is_tp_set(s['path'])), key=lambda p_: (p_.count('.'), p_))
+        return ws + tp
 
     def sim_file_changed(self):
         name = self.sim_file.get()
@@ -1622,17 +1816,80 @@ class App(tk.Tk):
             ld = self.loaded_file(path)
         except Exception:
             return
-        import wsdist_runner as W
-        known = W.ws_list() if self.ws_ready else None
-        sets = [s['path'] for s in ld.sets if '.WS' in s['path'] or 'WS[' in s['path']]
-        if known:
-            sets = [p for p in sets if doctor.ws_of(p, known)] or sets
+        sets = self._sim_sets(ld)
         self.sim_set.configure(values=sets)
-        if sets:
+        if sets and self.sim_set.get() not in sets:
             self.sim_set.set(sets[0])
         job = checks.job_of(name)
         if job:
             self.sim_sub.set(self.cfg['subs'].get(job, self.sim_sub.get()))
+        self.sim_set_changed()
+
+    def sim_set_changed(self):
+        sp = self.sim_set.get()
+        path = os.path.join(doctor.GS_DATA, self.sim_file.get())
+        t = self.dt_target(path, sp) or {}
+        for k, v in self.sim_dt.items():
+            v.set(int(t.get(k) or 0))
+        is_tp = doctor.is_tp_set(sp) if sp else False
+        mains, subs = self._weapon_choices(self.sim_file.get(), sp, is_tp)
+        self.sim_main.configure(values=[WPN_AUTO] + mains)
+        self.sim_subw.configure(values=[WPN_AUTO, doctor.NO_SUB] + subs)
+        self.sim_main.set(t.get('main') or WPN_AUTO)
+        self.sim_subw.set(t.get('sub') or WPN_AUTO)
+        self.sim_tp_label.config(text='WS at TP' if is_tp else 'TP')
+        self.sim_tp.set(self.cfg.get('ws_tp', 1000) if is_tp else self.cfg['tp'])
+        self.sim_dt_hint.config(text=('A TP set: all 0 = keep the damage taken it has now. ' if is_tp else
+                                      'A weapon skill set: all 0 = no limit (most damage). ')
+                                + 'The most is 50 % each. DT counts for both.')
+        self.sim_best = None
+        self.sim_apply_btn.config(state='disabled')
+        self.sim_new_btn.config(state='disabled')
+
+    def _sim_target(self):
+        out = {}
+        for k, v in self.sim_dt.items():
+            try:
+                out[k] = max(0, min(50, int(v.get())))
+            except (tk.TclError, ValueError):
+                out[k] = 0
+        for k, cb in (('main', self.sim_main), ('sub', self.sim_subw)):
+            if cb.get() and cb.get() != WPN_AUTO:
+                out[k] = cb.get()
+        return out
+
+    def _weapon_choices(self, fname, set_path, is_tp):
+        """(main weapons, sub items) he owns that this job can use - for a weapon skill set only that skill's weapons."""
+        job = checks.job_of(fname or '')
+        if not job or self.items is None:
+            return [], []
+        p = os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')
+        try:
+            snap = json.load(open(p, encoding='utf-8'))
+        except (OSError, ValueError):
+            return [], []
+        owned = features.owned_items(self.items, snap.get('bags', {}), job)
+        mains = sorted({it['en'] for it in owned if it['slots'] & 1})
+        subs = sorted({it['en'] for it in owned if it['slots'] & 2})
+        if self.ws_ready:
+            try:                                    # (only weapons wsdist knows - and of the weapon skill's kind)
+                import wsdist_runner as W
+                idx = W.gear_index()
+                skill = None
+                if not is_tp and set_path:
+                    known = W.ws_list()
+                    ws = doctor.ws_of(set_path, known) or (set_path.split('"')[1] if '"' in set_path and set_path.split('"')[1] in known else None)
+                    skill = W.ws_skill(ws) if ws else None
+                keep = []
+                for n in mains:
+                    ents = W.entries_for(n, self.items, idx)
+                    if ents and (skill is None or W.pick_variant(ents).get('Skill Type') == skill):
+                        keep.append(n)
+                mains = keep
+                subs = [n for n in subs if W.entries_for(n, self.items, idx)]
+            except Exception:
+                pass
+        return mains, subs
 
     def simulate(self, find_best):
         if not updater.installed():
@@ -1643,24 +1900,23 @@ class App(tk.Tk):
             return
         name, set_path = self.sim_file.get(), self.sim_set.get()
         if not name or not set_path:
-            messagebox.showinfo('GearSwap Doctor', 'Pick a file and a weapon skill set first.')
+            messagebox.showinfo('GearSwap Doctor', 'Pick a file and a set first.')
             return
         path = os.path.join(doctor.GS_DATA, name)
         job, sub, tp, enemy = checks.job_of(name), self.sim_sub.get(), int(self.sim_tp.get()), self.sim_enemy.get()
+        target = self._sim_target()
+        if find_best and self.sim_remember.get():
+            self.set_dt_target(path, set_path, target)
         who = self.who.get()
-        self.sim_status.config(text='wsdist is working ...')
+        metric = self.cfg.get('tp_metric', 'time')
+        self.sim_status.config(text='wsdist is working ... (a damage taken target takes longer)' if any(target.values())
+                               else 'wsdist is working ...')
         self.progress.config(mode='indeterminate'); self.progress.start(12)
 
         def work():
             try:
                 import wsdist_runner as W
                 ld = self.loaded_file(path)
-                known = W.ws_list()
-                ws = doctor.ws_of(set_path, known)
-                if not ws and '"' in set_path and set_path.split('"')[1] in known:
-                    ws = set_path.split('"')[1]
-                if not ws:
-                    raise ValueError(f"{set_path} isn't a weapon skill wsdist knows")
                 items = self.items or checks.Items()
                 bags = checks.load_bags(who) or {}
                 owned_ids = set()
@@ -1668,43 +1924,93 @@ class App(tk.Tk):
                     if not b.startswith('_') and b in checks.EQUIP_BAGS:
                         owned_ids |= set(c)
                 index = W.gear_index()
-                gear = next(s['gear'] for s in ld.sets if s['path'] == set_path)
+                gear = doctor.with_weapons(next(s['gear'] for s in ld.sets if s['path'] == set_path), target)
                 weapons = [(s['path'], s['gear']) for s in ld.sets if s['path'].startswith('sets.weapons')]
-                owned, cur, notes, skill = W.plan_ws(job, sub, ws, gear, weapons, owned_ids, items, index)
+                req = W.dt_requirement(target)
+                info = {}
+                if doctor.is_tp_set(set_path):
+                    tw, main_ws = doctor.tp_weapons(ld)
+                    owned, cur, notes = doctor.plan_tp(job, sub, gear, tw, main_ws, owned_ids, items, index)
+                    skill, what = None, 'tp'
+                else:
+                    known = W.ws_list()
+                    ws = doctor.ws_of(set_path, known)
+                    if not ws and '"' in set_path and set_path.split('"')[1] in known:
+                        ws = set_path.split('"')[1]
+                    if not ws:
+                        raise ValueError(f"{set_path} isn't a weapon skill wsdist knows")
+                    owned, cur, notes, skill = W.plan_ws(job, sub, ws, gear, weapons, owned_ids, items, index)
+                    what = ws
                 if 'main' not in cur:
                     raise ValueError(f'no {skill or "matching"} weapon to test it with')
-                now_gear = {W.GS_SLOT[s]: doctor._gs_name(e, items) for s, e in cur.items() if e and e.get('Name') != 'Empty'}
-                if find_best:
-                    best, dmg, now = W.best_ws_set(job, sub, ws, owned, cur, tp=tp, enemy_name=enemy)
-                    best_gear = {W.GS_SLOT[s]: doctor._gs_name(e, items) for s, e in best.items() if e and e['Name'] != 'Empty'}
+                now_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in cur.items() if e and e.get('Name') != 'Empty'}
+                best_gear = None
+                if what == 'tp':
+                    if find_best:
+                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info)
+                    else:
+                        now, dmg = W.tp_set_value(job, sub, cur, ws_tp=tp, enemy_name=enemy, metric=metric, info=info), None
+                elif find_best:
+                    best, dmg, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info)
                 else:
-                    now, dmg, best_gear = W.set_damage(job, sub, ws, cur, tp=tp, enemy_name=enemy), None, None
-                self.after(0, lambda: self._sim_done(path, set_path, ws, now, dmg, now_gear, best_gear, notes, tp, enemy))
+                    now, dmg = W.set_damage(job, sub, what, cur, tp=tp, enemy_name=enemy, info=info), None
+                if dmg is not None:
+                    best_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in best.items() if e and e['Name'] != 'Empty'}
+                info['asked'] = req
+                self.after(0, lambda: self._sim_done(path, set_path, what, now, dmg, now_gear, best_gear, notes, tp, enemy, info, metric))
             except Exception as e:
-                self.after(0, lambda: self._sim_failed(e))
+                self.after(0, lambda e=e: self._sim_failed(e))
         threading.Thread(target=work, daemon=True).start()
 
-    def _sim_done(self, path, set_path, ws, now, dmg, now_gear, best_gear, notes, tp, enemy):
+    def _sim_done(self, path, set_path, what, now, dmg, now_gear, best_gear, notes, tp, enemy, info=None, metric='time'):
         self.progress.stop(); self.progress.config(mode='determinate', value=0)
-        self.sim_status.config(text=f'{ws} at {tp} TP on {enemy}' + (('   (' + '; '.join(notes) + ')') if notes else ''))
+        info = info or {}
+        tpset = what == 'tp'
+        label = (f'TP set, weapon skill at {tp} TP' if tpset else f'{what} at {tp} TP') + f' on {enemy}'
+        self.sim_status.config(text=label + (('   (' + '; '.join(notes) + ')') if notes else ''))
+        unit = (' s to a WS' if metric == 'time' else ' per round') if tpset else ''
+
+        def fmt(v):
+            return f'{v:>7.2f}{unit}' if tpset else f'{v:>8.0f}'
+
+        def dts(t):
+            return f'physical {t[0]:.0f}%  magic {t[1]:.0f}%' if t else '?'
         if dmg is None:
-            self.sim_result.config(text=f'Average damage = {now:>8.0f}')
+            self.sim_result.config(text=('Your set = ' + fmt(now) + '\n' if tpset else f'Average damage = {now:>8.0f}\n')
+                                   + 'Damage taken: ' + dts(info.get('now')))
             self.sim_grid_now.show(now_gear)
             self.sim_grid_best.show({})
             self.sim_best = None
             self.sim_apply_btn.config(state='disabled')
+            self.sim_new_btn.config(state='disabled')
             return
-        gain = (dmg - now) / now * 100 if now else 0
-        self.sim_result.config(text=f'Your set = {now:>8.0f}    Best = {dmg:>8.0f}    {gain:+.1f}%')
-        changes = {s: n for s, n in best_gear.items() if s not in ('main', 'sub', 'range') and now_gear.get(s) != n}
+        if tpset and metric == 'time':
+            gain = (now - dmg) / now * 100 if now else 0
+        else:
+            gain = (dmg - now) / now * 100 if now else 0
+        lines = [f'Your set = {fmt(now)}    Best = {fmt(dmg)}    {gain:+.1f}%' + (' faster' if tpset and metric == 'time' else ''),
+                 f"Damage taken:  your set {dts(info.get('now'))}   ->   best {dts(info.get('best'))}"]
+        req = info.get('asked')
+        if req:
+            b = info.get('best') or (0, 0)
+            if b[0] <= req[0] + 0.01 and b[1] <= req[1] + 0.01:
+                lines.append(f'✔ It has the damage taken you asked for (physical {req[0]:.0f}%, magic {req[1]:.0f}%).')
+            else:
+                lines.append(f'⚠ Your gear can\'t reach physical {req[0]:.0f}% / magic {req[1]:.0f}% here - this is the '
+                             'closest wsdist found.')
+        self.sim_result.config(text='\n'.join(lines))
+        changes = {s_: n for s_, n in best_gear.items() if s_ not in ('main', 'sub', 'range') and now_gear.get(s_) != n}
         for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):          # only swapped sides: not a change
             if sorted(filter(None, [now_gear.get(p1), now_gear.get(p2)])) == sorted(filter(None, [best_gear.get(p1), best_gear.get(p2)])):
                 changes.pop(p1, None)
                 changes.pop(p2, None)
-        self.sim_grid_now.show(now_gear, {s: '#fbe3c4' for s in changes})
-        self.sim_grid_best.show(best_gear, {s: '#c8efc0' for s in changes})
-        self.sim_best = (path, set_path, changes) if changes and gain > 0 else None
+        self.sim_grid_now.show(now_gear, {s_: '#fbe3c4' for s_ in changes})
+        self.sim_grid_best.show(best_gear, {s_: '#c8efc0' for s_ in changes})
+        self.sim_best = (path, set_path, changes) if changes and (gain > 0 or req) else None
+        self.sim_best_gear = {s_: n for s_, n in best_gear.items() if s_ not in ('main', 'sub', 'range')}
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
+        self.sim_new_btn.config(state='normal')
+        self._sim_last = (path, set_path)
 
     def _sim_failed(self, e):
         self.progress.stop(); self.progress.config(mode='determinate', value=0)
@@ -1715,6 +2021,25 @@ class App(tk.Tk):
             return
         path, set_path, changes = self.sim_best
         self._apply({path: [('slots', set_path, changes)]})
+
+    def sim_save_new(self):
+        """The best set as a new set next to the one it was built from: sets.engaged + 'HighDT' -> sets.engaged.HighDT."""
+        if not self.sim_best_gear or not getattr(self, '_sim_last', None):
+            return
+        path, set_path = self._sim_last
+        from tkinter import simpledialog
+        name = simpledialog.askstring('GearSwap Doctor - save as a new set',
+                                      f'A name for the new set. It goes right after {set_path} in the file:\n\n'
+                                      f'    {set_path}.<name>\n\nFor example DT, HighDT, Safe. (GearSwap only uses it when '
+                                      "your file's rules ask for it - in Mote-style files, a set named after a mode such "
+                                      'as DT is used when that mode is on.)', initialvalue='DT', parent=self)
+        if not name:
+            return
+        name = name.strip()
+        new_path = set_path + ('.' + name if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name) else '["' + name.replace('"', '') + '"]')
+        target = self._sim_target()
+        if self._apply({path: [('add', set_path, new_path, dict(self.sim_best_gear))]}) is not False and self.sim_remember.get():
+            self.set_dt_target(path, new_path, target)
 
     # ------------------------------------------------------------------ My gear
     def _gear_tab(self):
@@ -2027,7 +2352,7 @@ class App(tk.Tk):
                     self.info[row] = u['error']
                     continue
                 row = t.insert(fid, 'end', iid=self._iid('u'), text=OFF + ' ' + u['ws'],
-                               values=(f"+{u['gain']}%", verdict(u['gain']), len(u['changes']), nowbest(u)),
+                               values=(gain_text(u), verdict_u(u), len(u['changes']), nowbest(u)),
                                tags=('big' if u['gain'] >= 15 else 'small' if u['gain'] < 5 else '',))
                 self.rows[row] = (f['path'], ('slots', u['set'], u['changes']))
                 self.info[('u', row)] = u
@@ -2072,10 +2397,11 @@ class App(tk.Tk):
             try:
                 rep = doctor.checkup(who, wsdist=updater.installed(), sub=cfg.get('subs') or 'WAR', tp=cfg.get('tp', 1500), enemy=cfg.get('enemy', 'Apex Toad'),
                                      tp_sets=cfg.get('tp_sets', True), ws_tp=cfg.get('ws_tp', 1000), tp_metric=cfg.get('tp_metric', 'time'),
+                                     targets=cfg.get('dt_targets') or {},
                                      progress=lambda m: self.after(0, lambda: self.status.config(text=m + ' ...')))
                 self.after(0, lambda: self._done(rep, who))
             except Exception as e:
-                self.after(0, lambda: self._failed(e, quiet))
+                self.after(0, lambda e=e: self._failed(e, quiet))
         threading.Thread(target=work, daemon=True).start()
 
     def _done(self, rep, who):
@@ -2121,9 +2447,10 @@ class App(tk.Tk):
         for path, edits in by_file.items():
             lines.append(os.path.basename(path) + ':')
             for e in edits:
-                lines.append(f'   {e[1]} -> {e[2]}' if e[0] == 'rename' else f'   {e[1]}: ' + ', '.join(f'{k} {v}' for k, v in e[2].items()))
+                lines.append(f'   {e[1]} -> {e[2]}' if e[0] == 'rename' else f'   new set {e[2]}' if e[0] == 'add'
+                             else f'   {e[1]}: ' + ', '.join(f'{k} {v}' for k, v in e[2].items()))
         if not self.confirm_changes(by_file):
-            return
+            return False
         out = []
         for path, edits in by_file.items():
             try:
@@ -2134,6 +2461,7 @@ class App(tk.Tk):
         messagebox.showinfo('GearSwap Doctor', '\n'.join(out) + '\n\nIn game: //gs reload (or change job) to use the new sets.')
         self.loaded.clear()
         self.run_check(quiet=True)
+        return True
 
     def confirm_changes(self, by_file):
         """A clear list of exactly what will change, before anything is written. True = go ahead."""
@@ -2141,7 +2469,7 @@ class App(tk.Tk):
         w.title('Change these GearSwap files?')
         w.geometry('900x480')
         w.transient(self)
-        n = sum(len(e[2]) if e[0] == 'slots' else 1 for edits in by_file.values() for e in edits)
+        n = sum(len(e[2]) if e[0] == 'slots' else len(e[3]) if e[0] == 'add' else 1 for edits in by_file.values() for e in edits)
         ttk.Label(w, text=f'{n} change(s) in {len(by_file)} file(s):', font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
         frame = ttk.Frame(w)
         frame.pack(fill='both', expand=True, padx=10)
@@ -2157,6 +2485,9 @@ class App(tk.Tk):
             for e in edits:
                 if e[0] == 'rename':
                     t.insert('', 'end', text=os.path.basename(path), values=('misspelled name (every set)', '', e[1], e[2]))
+                elif e[0] == 'add':
+                    for slot, new in e[3].items():
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[2] + '  (new set)', slot, '', new))
                 else:
                     cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
                     for slot, new in e[2].items():

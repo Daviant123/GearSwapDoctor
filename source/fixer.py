@@ -181,6 +181,32 @@ def set_slots(src, path, changes):
     return src[:start] + body + src[end + 1:]
 
 
+def add_set(src, after, new_path, gear):
+    """A new set (new_path = {gear}) on the line after the set it was made from (after), with the same indent."""
+    mask = _code_positions(src)
+    if any(mask[m.start()] for m in _path_regex(new_path).finditer(src)):
+        raise EditError(f'{new_path} is in the file already')
+    hits = [m for m in _path_regex(after).finditer(src) if mask[m.start()]]
+    if not hits:
+        raise EditError(f'{after} not found in the file')
+    m = hits[-1]
+    i = m.end()
+    if src.startswith('{', i):
+        end = _match(src, i, '{', '}') + 1
+    elif src.startswith('set_combine', i):
+        end = _match(src, src.index('(', i), '(', ')') + 1
+    else:
+        nl = src.find('\n', i)
+        end = len(src) if nl < 0 else nl
+    line_start = src.rfind('\n', 0, m.start()) + 1
+    indent = re.match(r'[ \t]*', src[line_start:]).group(0)
+    nl = src.find('\n', end)
+    end = len(src) if nl < 0 else nl
+    order = [s for s in SLOT_KEYS if s in gear]
+    body = ', '.join(f'{s}={_lua_str(gear[s])}' for s in order)
+    return src[:end] + '\n' + indent + new_path + ' = {' + body + '}' + src[end:]
+
+
 def _depth(body, pos):
     """Brace depth at pos inside a table text that starts with '{'."""
     d = 0
@@ -233,6 +259,9 @@ def apply(path, edits):
             elif e[0] == 'slots':
                 new = set_slots(new, e[1], e[2])
                 done.append(f'{e[1]}: ' + ', '.join(f'{k} {v}' for k, v in e[2].items()))
+            elif e[0] == 'add':
+                new = add_set(new, e[1], e[2], e[3])
+                done.append(f'new set {e[2]}')
         except EditError as x:
             failed.append(str(x))
     if new == src:

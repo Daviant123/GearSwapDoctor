@@ -32,7 +32,21 @@ def installed():
 FIXES = [('get_pdif.py',
           'elif wpn_type_skill=="Scythe":\n        pdif_base_cap = 4.0\n',
           'elif wpn_type_skill=="Scythe":\n        pdif_base_cap = 4.0\n    else:\n'
-          '        pdif_base_cap = 3.25 # (GearSwap Doctor: a shield / grip in the sub slot)\n')]
+          '        pdif_base_cap = 3.25 # (GearSwap Doctor: a shield / grip in the sub slot)\n'),
+         # a damage taken target: wsdist starts from its best set with no limit and tightens the limit 1 % per round (each
+         # round a full search - over 10 minutes for 50 %). GearSwap Doctor hands it a starting set that already has the
+         # damage taken asked; then keep that limit from the first round (one search, as fast as without a limit).
+         ('wsdist.py',
+          '    pdt_thresh_temp = 200 # How much PDT the current new set must have to be accepted. The starting values are high to ensure that the code enters the loop to begin with.\n'
+          '    mdt_thresh_temp = 200\n',
+          '    pdt_thresh_temp = 200 # How much PDT the current new set must have to be accepted. The starting values are high to ensure that the code enters the loop to begin with.\n'
+          '    mdt_thresh_temp = 200\n'
+          '    # (GearSwap Doctor: a starting set that already has the damage taken asked keeps it from the first round)\n'
+          '    _gsd_p0 = create_player(main_job, sub_job, master_level, starting_gearset, buffs, abilities)\n'
+          '    _gsd_p = max(-50, _gsd_p0.stats.get("PDT",0) + _gsd_p0.stats.get("DT",0)) + _gsd_p0.stats.get("PDT2",0) + _gsd_p0.stats.get("DT2",0)\n'
+          '    _gsd_m = max(-50, _gsd_p0.stats.get("MDT",0) + _gsd_p0.stats.get("DT",0)) + _gsd_p0.stats.get("MDT2",0) + _gsd_p0.stats.get("DT2",0)\n'
+          '    if (pdt_thresh < 0 or mdt_thresh < 0) and _gsd_p <= pdt_thresh and _gsd_m <= mdt_thresh:\n'
+          '        pdt_thresh_temp, mdt_thresh_temp = pdt_thresh, mdt_thresh\n')]
 
 
 def apply_fixes(folder=None):
@@ -48,7 +62,7 @@ def apply_fixes(folder=None):
         text = raw.replace(chr(13) + chr(10), chr(10))
         i = text.find(old)
         # (already fixed - by this or by hand: the line after it is an else)
-        if new in text or i < 0 or text[i + len(old):].lstrip(' ').startswith('else'):
+        if new in text or i < 0 or (name == 'get_pdif.py' and text[i + len(old):].lstrip(' ').startswith('else')):
             continue
         text = text.replace(old, new)
         open(p, 'w', encoding='utf-8', newline=chr(13) + chr(10) if crlf else chr(10)).write(text)
