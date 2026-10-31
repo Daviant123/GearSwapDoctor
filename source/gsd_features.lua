@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 2.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 3.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 2, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 3, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -141,11 +141,54 @@ function G.th_tag(spell, casting)
     end
 end
 
+-- Aftermath: gear for the level that's up (his request 2026-10-30). Your picks for that level first, then the sets named for it:
+-- sets.engaged.<weapon>.AM3, sets.engaged.<weapon>.AM, sets.engaged.AM3, sets.engaged.AM (or sets.TP..., as some files name them)
+function G.am_level()
+    for lv = 3, 1, -1 do
+        if buff('aftermath: lv.' .. lv) then return lv end
+    end
+    if buff('aftermath') then return 0 end                 -- (a Relic's has no level)
+    return nil
+end
+local function am_named(lv)
+    local main = player.equipment and name_of(player.equipment.main)
+    local bases = {}
+    for _, root in ipairs({ rawget(sets, 'engaged') or false, rawget(sets, 'TP') or false }) do
+        if type(root) == 'table' then
+            if type(main) == 'string' then
+                bases[#bases + 1] = rawget(root, main)
+                bases[#bases + 1] = rawget(root, (main:gsub('[^%w]', '')))
+            end
+            bases[#bases + 1] = root
+        end
+    end
+    local keys = lv == 0 and { 'AM', 'AM1' } or { 'AM' .. lv, 'AM' }
+    for _, b in ipairs(bases) do
+        for _, k in ipairs(keys) do
+            local t = type(b) == 'table' and rawget(b, k)
+            if type(t) == 'table' then return t end
+        end
+    end
+    return nil
+end
+function G.am_put()
+    if not on('aftermath') then return end
+    local lv = G.am_level()
+    if not lv then return end
+    local c = cfg.aftermath
+    local key = lv == 0 and 'relic' or tostring(lv)
+    local g = G.resolve(c['set' .. key])
+    if not g and has_gear(c['gear' .. key]) then g = c['gear' .. key] end
+    if not g and c.auto ~= false then g = am_named(lv) end
+    if g then equip(g) end
+end
+
 -- gear worn on top of whatever your file put on (after aftercast / status / buff / commands)
 function G.overlay(casting)
     local st = player and player.status
     if not casting then
         G.th_on = false
+        if st == 'Engaged' then G.am_put() end
         if on('th') and st == 'Engaged' and G.th_mode ~= 'Off' then
             local t = windower.ffxi.get_mob_by_target('t')
             if G.th_mode == 'Always' or (t and t.spawn_type == 16 and not G.tagged[t.id]) then
@@ -245,6 +288,7 @@ function G.box_update()
     if on('reraise') then parts[#parts + 1] = 'Reraise gear: ' .. (G.rr and 'ON' or 'off') end
     if on('kiting') and G.moving then parts[#parts + 1] = 'moving' end
     if on('lowhp') and G.low_hp then parts[#parts + 1] = 'LOW HP' end
+    if on('haste') and G.haste_short then parts[#parts + 1] = G.haste_short end
     if G.box.text then G.box:text('GSD  ' .. table.concat(parts, '  |  ')) end
     if G.box.show and not G.hidden then G.box:show() end
 end
@@ -259,6 +303,7 @@ local HELP = {
     'dt - damage taken set on / off', 'th - Treasure Hunter: Off / Tag / Always', 'weapons - lock / free your weapons',
     'reraise - reraise gear on / off', 'warp / dim / xp / cp - put on that ring, lock it, use it',
     'unlock - free the ring slots', 'box - show / hide the window', 'refresh - put your gear back on',
+    'haste - how much haste you have and what is still missing',
 }
 function G.command(w)
     local c = low(w[2])
@@ -290,6 +335,9 @@ function G.command(w)
         if G.box then if G.hidden then G.box:hide() else G.box:show() end end
     elseif c == 'refresh' then
         G.refresh()
+    elseif c == 'haste' then
+        local h = G.haste_now()
+        if h then say(G.haste_words(h)) else say('haste: nothing to read yet') end
     else
         say('commands (//gs c gsd ...):')
         for _, h in ipairs(HELP) do add_to_chat(207, '   ' .. h) end
@@ -424,9 +472,163 @@ function G.ammo(spell)
     end
 end
 
+-- Haste (his request 2026-10-30): which level, and is delay capped with gear + buffs. The caps are the game's: gear 25 %, magic 43.75 %,
+-- abilities 25 %, delay 80 % less at most. Gear is read from the items worn; the buffs from their icons, which don't say how strong: a Haste or
+-- March seen landing on you counts as what it was, otherwise the ones in the options. So: a good estimate, not the server's number.
+local GEAR_CAP, MAGIC_CAP, JA_CAP, DELAY_CAP = 25, 43.75, 25, 80
+-- bg-wiki.com/ffxi/Attack_Speed: Haste 150/1024, Haste II 30 %, Refueling 10, Erratic Flutter 30, Animating Wail 15, Hastega 153/1024
+local HASTE_SPELLS = { [57] = 14.65, [511] = 30, [530] = 10, [710] = 30, [661] = 15, [358] = 14.94 }
+-- March: {base, each Songs+, Songs+ that count}, out of 1024: the same page's ranges (Advancing 10.55-18.95 %, Victory 15.92-28.61 %, Honor 12.30-16.99 %)
+local MARCHES = { [419] = { 108, 10.75, 8 }, [420] = { 163, 16.25, 8 }, [417] = { 126, 12, 4 } }
+local TWO_HANDED_SKILL = { [4] = true, [6] = true, [7] = true, [8] = true, [10] = true, [12] = true }
+local DW_MAIN = { NIN = 35, DNC = 30, THF = 25 }             -- (at 99; the higher of job and sub job, they don't add up: FFXIAH, 49635)
+local DW_SUB = { NIN = 25, DNC = 15 }
+local WORN = { 'main', 'sub', 'range', 'ammo', 'head', 'neck', 'left_ear', 'right_ear', 'body', 'hands', 'left_ring', 'right_ring',
+               'back', 'waist', 'legs', 'feet' }
+local gear_stats = {}
+
+-- Haste and Dual Wield of one item: its text up to the first "Set:", "Pet:", "Latent effect:" ... (those don't count), and its augments
+local function item_stats(it)
+    local key = tostring(it.id) .. '/' .. tostring(it.extdata)
+    if gear_stats[key] then return gear_stats[key] end
+    local out = { haste = 0, dw = 0 }
+    local res = gearswap and gearswap.res
+    local d = res and res.item_descriptions and res.item_descriptions[it.id]
+    local text = d and d.en or ''
+    local from = 1
+    while true do
+        local a, b, word = text:find('(%a+):', from)
+        if not a then break end
+        if word ~= 'DEF' and word ~= 'DMG' and word ~= 'Delay' then text = text:sub(1, a - 1) break end
+        from = b + 1
+    end
+    out.haste = tonumber(text:match('Haste%+(%d+)')) or 0
+    out.dw = tonumber(text:match('Dual Wield"?%+(%d+)')) or 0
+    local ok, dec = pcall(function() return gearswap.extdata.decode(it) end)
+    for _, aug in ipairs(ok and type(dec) == 'table' and dec.augments or {}) do
+        if type(aug) == 'string' and not aug:find(':') then
+            out.haste = out.haste + (tonumber(aug:match('Haste%+(%d+)')) or 0)
+            out.dw = out.dw + (tonumber(aug:match('Dual Wield"?%+(%d+)')) or 0)
+        end
+    end
+    gear_stats[key] = out
+    return out
+end
+
+local function march_percent(id)
+    local m = MARCHES[id]
+    return (m[1] + math.min(m[3], (cfg.haste and cfg.haste.song) or 7) * m[2]) / 1024 * 100
+end
+
+-- {gear, magic, ja, total, need, capped, word}, or nil when the game has nothing to read yet
+function G.haste_now()
+    local p = windower.ffxi.get_player()
+    if not p or type(p.buffs) ~= 'table' then return nil end
+    local eq = windower.ffxi.get_items and windower.ffxi.get_items('equipment')
+    local gear, dw, two_handed, off_weapon, main_name, main_level = 0, 0, false, false, nil, 0
+    if type(eq) == 'table' then
+        for _, slot in ipairs(WORN) do
+            local idx = eq[slot]
+            if idx and idx ~= 0 then
+                local it = windower.ffxi.get_items(eq[slot .. '_bag'], idx)
+                if type(it) == 'table' and it.id and it.id ~= 0 then
+                    local st = item_stats(it)
+                    gear, dw = gear + st.haste, dw + st.dw
+                    local info = gearswap and gearswap.res and gearswap.res.items and gearswap.res.items[it.id]
+                    if slot == 'main' and info and TWO_HANDED_SKILL[info.skill or 0] then two_handed = true end
+                    if slot == 'main' and info then main_name, main_level = info.en, info.item_level or 0 end
+                    if slot == 'sub' and info and info.category == 'Weapon' and (info.skill or 0) > 0 then off_weapon = true end
+                end
+            end
+        end
+    end
+    local c = cfg.haste or {}
+    local magic, ja, marches = 0, 0, 0
+    local main_job, sub_job = player and player.main_job, player and player.sub_job
+    for _, id in ipairs(p.buffs) do
+        if id == 33 then magic = magic + (G.haste_seen or (c.spell == 'Haste' and 14.65 or 30))
+        elseif id == 580 then magic = magic + (c.geo or 40)
+        elseif id == 214 then marches = marches + 1
+        elseif id == 228 then magic = magic + 25.9                -- Embrava, its maximum
+        elseif id == 604 then magic = magic + 15                  -- Mighty Guard
+        elseif id == 13 or id == 565 then magic = magic - 29.2    -- Slow, at its worst (7.3 - 29.2 %; the wiki has nothing on Slow II)
+        elseif id == 194 then magic = magic - 50                  -- Elegy, at its worst (Carnage Elegy)
+        elseif id == 273 and main_name == 'Apocalypse' then              -- its Aftermath: ability haste at iLv119 III, gear haste below (Attack_Speed)
+            if main_level >= 119 then ja = ja + 10 else gear = gear + 10 end
+        elseif id == 64 and two_handed then ja = ja + ((main_job == 'DRK') and 25 or 15)
+        elseif id == 353 and two_handed then ja = ja + 10
+        elseif id == 370 then ja = ja + ((main_job == 'DNC') and 10 or 5)
+        end
+    end
+    local seen = G.marches_seen or {}
+    for i = 1, marches do
+        magic = magic + march_percent(seen[#seen - i + 1] or (i == 1 and 420 or 419))
+    end
+    gear, magic, ja = math.min(gear, GEAR_CAP), math.max(0, math.min(magic, MAGIC_CAP)), math.min(ja, JA_CAP)
+    local total = gear + magic + ja
+    local need = DELAY_CAP
+    if off_weapon then
+        dw = dw + math.max(main_job == 'BLU' and (c.blu_dw or 25) or DW_MAIN[main_job] or 0, DW_SUB[sub_job] or 0)
+        need = dw >= DELAY_CAP and 0 or (1 - 0.2 / (1 - dw / 100)) * 100
+    end
+    local word = (magic >= MAGIC_CAP - 0.01 and 'capped') or (magic >= 35 and 'high') or (magic >= 30 and 'mid') or (magic >= 14 and 'low') or 'none'
+    return { gear = gear, magic = magic, ja = ja, total = total, need = need, dw = off_weapon and dw or 0, capped = total >= need - 0.01, word = word }
+end
+
+function G.haste_words(h)
+    local parts = ('gear %.0f/%d, magic %.1f/43.75 (%s), abilities %.0f/%d'):format(h.gear, GEAR_CAP, h.magic, h.word, h.ja, JA_CAP)
+    if h.dw > 0 then parts = parts .. (', Dual Wield %.0f'):format(h.dw) end
+    if h.capped then
+        return ('Delay capped: %.1f%% haste, %.1f%% needed (%s)'):format(h.total, h.need, parts)
+    end
+    return ('Haste %.1f%%: %.1f%% short of the delay cap (%s)'):format(h.total, h.need - h.total, parts)
+end
+
+-- Every 2 s while fighting and not in an action: tell when it has stayed at a new level for one more look (swaps and refreshes don't count)
+function G.haste_tick(status)
+    if not on('haste') or status ~= 1 or (midaction and midaction()) then return end
+    local now = os.clock()
+    if now < (G.haste_next or 0) then return end
+    G.haste_next = now + 2
+    local ok, h = pcall(G.haste_now)
+    if not ok or not h then return end
+    G.haste_short = h.capped and 'Delay capped' or ('Haste %.0f/%.0f'):format(h.total, h.need)
+    local tell = cfg.haste.tell or 'When it changes level'
+    local key = tell == 'Only capped / not capped' and tostring(h.capped) or (tostring(h.capped) .. '|' .. h.word .. '|' .. math.floor(h.gear) .. '|' .. math.floor(h.ja))
+    if key == G.haste_told then return end
+    if key ~= G.haste_maybe then G.haste_maybe = key return end
+    G.haste_told = key
+    if tell ~= 'Never' then add_to_chat(h.capped and 158 or 207, 'GearSwap Doctor: ' .. G.haste_words(h)) end
+    G.box_update()
+end
+
+-- A Haste or March landing on you says how strong it is
+local function on_spell(act)
+    if not on('haste') or not act or act.category ~= 4 then return end
+    local id = me_id()
+    for _, t in ipairs(act.targets or {}) do
+        if t.id == id then
+            if HASTE_SPELLS[act.param] then G.haste_seen = HASTE_SPELLS[act.param]
+            elseif MARCHES[act.param] then
+                local seen = G.marches_seen or {}
+                seen[#seen + 1] = act.param
+                if #seen > 4 then table.remove(seen, 1) end
+                G.marches_seen = seen
+            end
+            return
+        end
+    end
+end
+
 -- buffs: doom message / Holy Water, rings unlock when the experience ring's buff lands
 function G.buff(name, gain)
     local n = low(name)
+    if on('aftermath') and n:find('^aftermath') then
+        if cfg.aftermath.say ~= false then
+            say(gain and (name .. ' is up') or (name .. ' wore off'))
+        end
+        G.pending = true                                      -- (when it wears off your file's set has to come back)
+    end
     if on('doom') and gain and (n == 'doom' or (cfg.doom.curse and n == 'curse')) then
         if type(cfg.doom.say) == 'string' and cfg.doom.say ~= '' then send_command('input /p ' .. cfg.doom.say) end
         if cfg.doom.holy then send_command('input /item "Holy Water" <me>') end
@@ -477,6 +679,7 @@ local function tick()
         G.pending = false
         send_command('gs c gsd refresh')
     end
+    G.haste_tick(status)
 end
 
 local function on_action(act)
@@ -536,9 +739,10 @@ function G.install()
         for _, k in ipairs(G.binds) do send_command('unbind ' .. k) end
         if G.box and G.box.destroy then G.box:destroy() end
     end)
-    if on('kiting') or on('lowhp') or on('refresh') or on('th') then
+    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') then
         windower.raw_register_event('prerender', tick)
     end
+    if on('haste') then windower.raw_register_event('action', on_spell) end
     if on('th') then windower.raw_register_event('action', on_action) end
     if on('th') or on('rings') then
         windower.raw_register_event('zone change', function()

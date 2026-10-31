@@ -1,12 +1,15 @@
-# GearSwap Doctor 2.7.0
+# GearSwap Doctor 2.10.0
 
 A free tool for Final Fantasy XI players who use **Windower 4 + GearSwap**. It checks your GearSwap files, fixes what
 can be fixed, and finds better weapon skill sets **from the gear you own**, using **wsdist** (Kastra's FFXI damage
 simulator).
 
-**Download:** click `GearSwap Doctor.exe` above, then **Download raw file** (or the download button). Double-click it:
-nothing to install. Windows may say "Windows protected your PC" the first time (the exe isn't signed): click
-**More info > Run anyway**.
+**Download, nothing to install:** [**the latest release**](https://github.com/Daviant123/GearSwapDoctor/releases/latest)
+
+- **Windows:** download `GearSwap.Doctor.exe` and double-click it. Windows may say "Windows protected your PC" the first time (the exe
+  isn't signed): click **More info > Run anyway**.
+- **Linux:** download `GearSwap-Doctor-linux.tar.gz`, unpack it, and double-click `GearSwap-Doctor` (or run `./GearSwap-Doctor`). It finds Windower in
+  the usual Wine, Proton, Lutris and Bottles folders, or asks once. See [LINUX.md](LINUX.md).
 
 ## What it does
 

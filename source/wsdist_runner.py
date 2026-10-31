@@ -496,8 +496,11 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             if req:
                 first, (req_p, req_m) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
             _keep_accuracy(cp, job, sub, ml, player0, first, stats, abilities, buffs, info)
-            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
-                                       check, dict(first), req_p, req_m, m, False, 0)
+            try:
+                best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
+                                           check, dict(first), req_p, req_m, m, False, 0)
+            except UnboundLocalError:                                  # (every slot has one choice: wsdist tests nothing, and trips over that)
+                best = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(first), buffs=stats, abilities=abilities)
             after = act.average_attack_round(best, enemy, 0, ws_tp, m)
             dt_best = dt_of(best)
             if metric == 'dps' and info is not None:
@@ -594,8 +597,11 @@ def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', m
             if req:
                 first, (rp, rm) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
             _keep_accuracy(cp, job, sub, ml, player0, first, stats, abilities, buffs, info)
-            best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, ws, 'None', 'weapon skill', tp,
-                                       check, dict(first), rp, rm, 'Damage dealt', False, 0)
+            try:
+                best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, ws, 'None', 'weapon skill', tp,
+                                           check, dict(first), rp, rm, 'Damage dealt', False, 0)
+            except UnboundLocalError:                                  # (the same)
+                best = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(first), buffs=stats, abilities=abilities)
             after = act.average_ws(best, enemy, ws, tp, 'melee', 'Damage dealt')
             dt_best = dt_of(best)
     finally:

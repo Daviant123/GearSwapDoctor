@@ -35,17 +35,19 @@ from tkinter import filedialog, messagebox, ttk
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import paths    # noqa: E402
+import rema     # noqa: E402
 import checks   # noqa: E402
 import doctor   # noqa: E402
 import features  # noqa: E402
 import fixer    # noqa: E402
 import gs_loader  # noqa: E402
 import healing  # noqa: E402
+import idle     # noqa: E402
 import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.7.0'
+VERSION = '2.10.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -122,6 +124,8 @@ def nowbest(u):
         return f"{u['now']} s -> {u['best']} s to a WS"
     if u.get('unit') == 'dps':
         return f"{u['now']:.0f} -> {u['best']:.0f} damage a second"
+    if u.get('kind') == 'idle':
+        return f"{u['now_text']}  ->  {u['best_text']}"
     return f"{u['now']} -> {u['best']}"
 
 
@@ -129,6 +133,8 @@ def gain_words(u):
     """What the gain is: 'average damage for Savage Blade' / 'faster to a weapon skill (TP set engaged.Acc)'."""
     if u.get('kind') == 'tp':
         return {'s': 'faster to a weapon skill', 'dps': 'more damage a second, weapon skills included'}.get(u.get('unit'), 'more damage per attack round') + f" with {u['ws'][4:]}"
+    if u.get('kind') == 'idle':
+        return f"better for what it's for ({u['ws']})"
     return f"average damage for {u['ws']}"
 
 
@@ -360,7 +366,7 @@ class App(tk.Tk):
         super().__init__()
         style = ttk.Style()
         try:
-            style.theme_use('vista')                     # wsdist's look
+            style.theme_use('vista' if os.name == 'nt' else 'clam')      # wsdist's look (Linux: Tk's plain one is much older)
         except tk.TclError:
             pass
         style.configure('Treeview', rowheight=22)
@@ -452,10 +458,14 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ setup
     def _set_icon(self):
-        ico = os.path.join(getattr(sys, '_MEIPASS', HERE), 'gsd.ico')
+        folder = getattr(sys, '_MEIPASS', HERE)
         try:
-            if os.path.exists(ico):
-                self.iconbitmap(ico)
+            if os.name == 'nt':
+                if os.path.exists(os.path.join(folder, 'gsd.ico')):
+                    self.iconbitmap(os.path.join(folder, 'gsd.ico'))
+            elif os.path.exists(os.path.join(folder, 'gsd.png')):       # (Linux has no .ico)
+                self._icon = tk.PhotoImage(file=os.path.join(folder, 'gsd.png'))
+                self.iconphoto(True, self._icon)
         except tk.TclError:
             pass
 
@@ -559,6 +569,9 @@ class App(tk.Tk):
         sb.pack(side='right', fill='y')
         canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-e.delta / 120), 'units')
                         if str(self.nb.select()) == str(self.tab_start) and self.all_frame.winfo_ismapped() else None)
+        for button, step in (('<Button-4>', -1), ('<Button-5>', 1)):   # (Linux's mouse wheel)
+            canvas.bind_all(button, lambda e, n=step: canvas.yview_scroll(n, 'units')
+                            if str(self.nb.select()) == str(self.tab_start) and self.all_frame.winfo_ismapped() else None)
 
         # one job's page
         self.job_frame = ttk.Frame(self.job_right)
@@ -758,6 +771,9 @@ class App(tk.Tk):
         if sug:
             out.append('★ Suggested: ' + ', '.join(f"{features.BY_KEY[k]['title']} ({v})" for k, v in list(sug.items())[:4])
                        + (f' and {len(sug) - 4} more' if len(sug) > 4 else '') + '.')
+        am = features.am_sets([x['path'] for x in self.loaded_file(path).sets])
+        if am:
+            out.append(features.am_words([x['path'] for x in self.loaded_file(path).sets]))
         return '  '.join(out) or 'Nothing suggested - "Choose features..." shows them all.'
 
     def _job_tick(self, e):
@@ -1041,10 +1057,24 @@ class App(tk.Tk):
         self.feat_what.pack(anchor='w', pady=(2, 4))
         self.feat_note = ttk.Label(right, text='', wraplength=500, justify='left', foreground='#b36b00')
         self.feat_note.pack(anchor='w')
-        self.feat_opts = ttk.LabelFrame(right, text='Options', padding=8)
-        self.feat_opts.pack(fill='x', pady=6)
         self.feat_cmds = ttk.Label(right, text='', justify='left', foreground='#2e5c8a', font=MONO, wraplength=500)
-        self.feat_cmds.pack(anchor='w')
+        self.feat_cmds.pack(side='bottom', anchor='w')
+        # (scrolls: Aftermath has gear lists for each level)
+        holder = ttk.Frame(right)
+        holder.pack(fill='both', expand=True, pady=6)
+        canvas = tk.Canvas(holder, highlightthickness=0)
+        bar = ttk.Scrollbar(holder, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        self.feat_opts = ttk.LabelFrame(canvas, text='Options', padding=8)
+        canvas.create_window((0, 0), window=self.feat_opts, anchor='nw')
+        self.feat_opts.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', lambda ev: canvas.yview_scroll(-1 if ev.delta > 0 else 1, 'units')))
+        canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
+        for button, step in (('<Button-4>', -1), ('<Button-5>', 1)):   # (Linux's mouse wheel)
+            self.feat_opts.bind(button, lambda e, n=step: canvas.yview_scroll(n, 'units'))
+            canvas.bind(button, lambda e, n=step: canvas.yview_scroll(n, 'units'))
         bottom = ttk.Frame(tab)
         bottom.pack(fill='x', pady=(6, 0))
         b1 = ttk.Button(bottom, text='✔ Add ticked features to this file', style='Big.TButton', command=self.feat_apply)
@@ -1297,11 +1327,71 @@ class App(tk.Tk):
                     row += 1
                     ttk.Label(box, text='(item names, separated by commas)', foreground='#777').grid(row=row, column=1, sticky='w')
             row += 1
+        if key == 'aftermath':
+            ttk.Separator(box).grid(row=row, column=0, columnspan=2, sticky='ew', pady=6)
+            self.feat_am_text = ttk.Label(box, text=features.am_words(self.feat_sets), wraplength=420, justify='left')
+            self.feat_am_text.grid(row=row + 1, column=0, columnspan=2, sticky='w')
+            ult = sorted({it['en'] for it in owned if features.fits(it, 'main') and rema.family(it['en']) not in (None, 'Aeonic')})
+            ttk.Label(box, text='A set for no weapon in particular: judge it with').grid(row=row + 2, column=0, sticky='w', pady=(4, 0))
+            self.feat_am_weapon = ttk.Combobox(box, values=['(your file decides)'] + ult, state='readonly', width=30)
+            self.feat_am_weapon.set('(your file decides)')
+            self.feat_am_weapon.grid(row=row + 2, column=1, sticky='w', pady=(4, 0))
+            self.feat_am_btn = ttk.Button(box, text='Make the missing Aftermath sets from my gear...', command=self.feat_am_make)
+            self.feat_am_btn.grid(row=row + 3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+            ToolTip(self.feat_am_btn, 'wsdist finds the best set for each Ultimate Weapon you own that has no Aftermath set yet, with Aftermath up. '
+                                      'You see exactly what goes in the file before anything is written.')
         cmds = list(features.COMMANDS.get(key, []))
         if cmds:
             self.feat_cmds.config(text='In game:\n  ' + '\n  '.join(cmds) + '\n  //gs c gsd help')
         else:
             self.feat_cmds.config(text='Works by itself in game - nothing to type.')
+
+    def feat_am_make(self):
+        """The sets the Aftermath feature looks for, made with wsdist. His request 2026-10-30: 'look or add gear settings for different levels of aftermath'."""
+        if not self.ws_ready:
+            messagebox.showinfo('GearSwap Doctor', 'wsdist is still loading - try again in a moment.')
+            return
+        path, job, who = self.feat_path, self.feat_job, self.who.get()
+        sub = (self.cfg.get('subs') or {}).get(job, 'WAR')
+        buffs = W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), 'auto')
+        prefer = self.feat_am_weapon.get()
+        self.feat_am_btn.config(state='disabled')
+        self.feat_am_text.config(text='wsdist is working ...')
+
+        def work():
+            try:
+                ld = self.loaded_file(path)
+                items = self.items or checks.Items()
+                bags = checks.load_bags(who) or {}
+                owned_ids = set()
+                for b, c in bags.items():
+                    if not b.startswith('_') and b in checks.EQUIP_BAGS:
+                        owned_ids |= set(c)
+                index = W.gear_index()
+                todo, have = doctor.am_missing(ld, job, sub, owned_ids, items, index, prefer)
+                made = [doctor.am_build(ld, m, job, sub, owned_ids, items, index, buffs, self.cfg.get('ws_tp', 1000), self.cfg.get('enemy', 'Apex Toad'),
+                                        self.cfg.get('tp_metric', 'time')) for m in todo]
+                self.after(0, lambda: self._feat_am_done(path, ld, made, have))
+            except Exception as e:
+                self.after(0, lambda e=e: self._feat_am_failed(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _feat_am_failed(self, e):
+        self.feat_am_btn.config(state='normal')
+        self.feat_am_text.config(text=f'wsdist could not do it: {e}')
+
+    def _feat_am_done(self, path, ld, made, have):
+        self.feat_am_btn.config(state='normal')
+        if not made:
+            self.feat_am_text.config(text=features.am_words(self.feat_sets) + (' Nothing missing for ' + ', '.join(have) + '.' if have else
+                                     ' You own no Ultimate Weapon this job can use that wsdist can count.'))
+            return
+        anchors = [s['path'] for s in ld.sets]
+        self.feat_am_text.config(text='; '.join(f"{m['path']} for {m['weapon']}" for m in made))
+        if self._apply({path: [('new', m['path'], m['gear'], anchors) for m in made]}) is not False:
+            self.feat_load()
+        else:
+            self.feat_am_text.config(text=features.am_words(self.feat_sets))
 
     def _feat_gear(self, key, opt, slot, value):
         g = dict(self.feat_conf[key].get(opt) or {})
@@ -2134,6 +2224,14 @@ class App(tk.Tk):
         self.sim_remember = tk.BooleanVar(value=True)
         ttk.Checkbutton(dtf, text='Remember for this set (the check-ups use it too)', variable=self.sim_remember).grid(
             row=4, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        lb = ttk.Label(dtf, text='An idle set is for')
+        lb.grid(row=5, column=0, sticky='w', pady=(4, 0))
+        ToolTip(lb, 'Idle and defense sets: what counts most after your damage taken. It starts from the set\'s name: Refresh, Town, PDT, MEVA...')
+        self.sim_focus = ttk.Combobox(dtf, values=list(idle.FOCUS), state='disabled', width=14)
+        self.sim_focus.grid(row=5, column=1, columnspan=2, sticky='w', pady=(4, 0))
+        self.sim_shell = tk.BooleanVar(value=False)
+        self.sim_shell_btn = ttk.Checkbutton(dtf, text='Idle set: I always have Shell V (21 % magic from gear is enough)', variable=self.sim_shell, state='disabled')
+        self.sim_shell_btn.grid(row=6, column=0, columnspan=3, sticky='w', pady=(2, 0))
 
         mine = ttk.LabelFrame(top, text='Damage taken you set', padding=6)
         mine.pack(side='left', fill='both', padx=(8, 0))
@@ -2241,7 +2339,8 @@ class App(tk.Tk):
         if known:
             ws = [p_ for p_ in ws if doctor.ws_of(p_, known)] or ws
         tp = sorted((s['path'] for s in ld.sets if doctor.is_tp_set(s['path'])), key=lambda p_: (p_.count('.'), p_))
-        return ws + tp
+        rest = sorted((s['path'] for s in ld.sets if idle.is_idle(s['path'])), key=lambda p_: (p_.count('.'), p_))
+        return ws + tp + rest
 
     def sim_file_changed(self):
         name = self.sim_file.get()
@@ -2273,7 +2372,12 @@ class App(tk.Tk):
         self.sim_subw.set(t.get('sub') or WPN_AUTO)
         self.sim_tp_label.config(text='WS at TP' if is_tp else 'TP')
         self.sim_tp.set(self.cfg.get('ws_tp', 1000) if is_tp else self.cfg['tp'])
-        self.sim_dt_hint.config(text=('A TP set: all 0 = keep the damage taken it has now. ' if is_tp else
+        rest = idle.is_idle(sp)
+        self.sim_focus.config(state='readonly' if rest else 'disabled')
+        self.sim_focus.set(idle.focus_for(sp) if rest else '')
+        self.sim_shell_btn.config(state='normal' if rest else 'disabled')
+        self.sim_dt_hint.config(text=('An idle set: all 0 = as much as it can get, by what it is for. Enemy, TP, buffs and Aftermath don\'t matter here. ' if rest else
+                                      'A TP set: all 0 = keep the damage taken it has now. ' if is_tp else
                                       'A weapon skill set: all 0 = no limit (most damage). ')
                                 + 'The most is 50 % each. DT counts for both.')
         self.sim_best = None
@@ -2325,7 +2429,74 @@ class App(tk.Tk):
                 pass
         return mains, subs
 
+    def _sim_idle(self, find_best):
+        """An idle or defense set: judged on the game's item text (idle.py), wsdist has no idle maths."""
+        name, set_path = self.sim_file.get(), self.sim_set.get()
+        path = os.path.join(doctor.GS_DATA, name)
+        job, sub = checks.job_of(name), self.sim_sub.get()
+        target = self._sim_target()
+        if find_best and self.sim_remember.get():
+            self.set_dt_target(path, set_path, target)
+        focus = self.sim_focus.get() or None
+        shell = bool(self.sim_shell.get())
+        need = {k: target[k] for k in ('dt', 'pdt', 'mdt') if target.get(k)}
+        self.sim_status.config(text='Working it out from your gear ...')
+        self.progress.config(mode='indeterminate'); self.progress.start(12)
+
+        def work():
+            try:
+                ld = self.loaded_file(path)
+                gear = doctor.with_weapons(next(s['gear'] for s in ld.sets if s['path'] == set_path), target)
+                cands, counts = self._heal_cands(job)
+                keep = True if target.get('main') or target.get('sub') else None
+                r = idle.judge(set_path, gear, job, sub, cands, counts, self.items or checks.Items(), self._heal_data, need=need, focus=focus,
+                               keep_weapons=keep, build=find_best, shell=shell)
+                self.after(0, lambda: self._sim_idle_done(path, set_path, r, need, find_best))
+            except Exception as e:
+                self.after(0, lambda e=e: self._sim_failed(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sim_idle_done(self, path, set_path, r, need, find_best):
+        self.progress.stop(); self.progress.config(mode='determinate', value=0)
+        self.sim_status.config(text='   '.join(r['notes']))
+        names = lambda g: {s: c['name'] for s, c in g.items() if c}  # noqa: E731
+        now_gear = names(r['cur'])
+        lines = ['Your set:  ' + idle.words(r['n_now'], r['base'])]
+        if r['n_now']['over']:
+            lines.append(f"⚠ {r['n_now']['over']} % of its damage taken is over the 50 % cap: that gear could be doing something else.")
+        self._sim_last = (path, set_path)
+        if not find_best:
+            self.sim_result.config(text='\n'.join(lines))
+            self.sim_grid_now.show(now_gear)
+            self.sim_grid_best.show({})
+            self.sim_best = None
+            self.sim_apply_btn.config(state='disabled')
+            self.sim_new_btn.config(state='disabled')
+            return
+        lines.append('Best:        ' + idle.words(r['n_best'], r['base']))
+        if need and r['short']:
+            lines.append(f"⚠ Your gear can't reach the damage taken you asked for: this is the closest ({r['short']} % short in all).")
+        elif need:
+            lines.append('✔ It has the damage taken you asked for.')
+        if not r['changes']:
+            lines.append('Your set is already the best your gear can do for this.')
+        tip = idle.advice(r['n_best'], r['base'])
+        if tip:
+            lines.append(tip + '.')
+        self.sim_result.config(text='\n'.join(lines))
+        changes = r['changes']
+        marks = list(changes)
+        self.sim_grid_now.show(now_gear, {s: '#fbe3c4' for s in marks})
+        self.sim_grid_best.show(names(r['best']), {s: '#c8efc0' for s in marks})
+        self.sim_best = (path, set_path, changes) if changes else None
+        self.sim_best_gear = {s: healing.gs_name(c) for s, c in r['best'].items() if c and s not in ('main', 'sub') or (c and not r['keep'])}
+        self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
+        self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
+
     def simulate(self, find_best):
+        if self.sim_set.get() and idle.is_idle(self.sim_set.get()):
+            self._sim_idle(find_best)
+            return
         if not updater.installed():
             self.install_wsdist(ask=True)
             return
@@ -2544,7 +2715,7 @@ class App(tk.Tk):
         bar = ttk.Frame(tab)
         bar.pack(fill='x', pady=(6, 0))
         ttk.Button(bar, text='Put this backup back', command=self.restore).pack(side='left')
-        ttk.Button(bar, text='Open the backups folder', command=lambda: os.startfile(self._backups())).pack(side='left', padx=8)
+        ttk.Button(bar, text='Open the backups folder', command=lambda: open_folder(self._backups())).pack(side='left', padx=8)
         ttk.Label(bar, text='Every change GearSwap Doctor makes saves the file here first.', foreground='#666').pack(side='left', padx=8)
 
     def _backups(self):
@@ -3176,11 +3347,23 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
 
+def open_folder(path):
+    """In the file manager: Explorer on Windows, whatever the desktop uses on Linux."""
+    if os.name == 'nt':
+        os.startfile(path)
+    else:
+        import subprocess
+        subprocess.Popen(['xdg-open', path])
+
+
 def selftest(out_path):
     """GSD_SELFTEST=<file>: the exe checks itself without a window (the build script runs it): Windower found, items
     read, wsdist downloaded and loaded, one real check-up with wsdist. Writes the results as JSON."""
     out = {'frozen': paths.FROZEN, 'app': paths.APP, 'windower': paths.WINDOWER}
     try:
+        # (what needs no Windower: Lua and the shared features code are really in the build - the Linux build checks these on GitHub)
+        out['lua'] = features.simulate_src('function get_sets() sets.idle = {head="Nyame Helm"} end\n' + features.render({'haste': {'on': True, 'tell': 'Never', 'spell': 'Haste II',
+                                           'song': 7, 'geo': 40, 'blu_dw': 25}}), 'Selftest_WAR.lua', features.engine_source())
         out['items'] = len(checks.Items().by_id)
         if not updater.installed():
             updater.update(log=lambda m: None)

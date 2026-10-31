@@ -28,6 +28,7 @@ except ImportError:                      # pragma: no cover
 import fixer
 import gs_loader
 import paths
+import rema
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE_NAME = 'gsd-features.lua'
@@ -226,6 +227,32 @@ FEATURES = [
              'good to forget. It only reminds you.',
      'opts': [('every', 'int', 'At most every (seconds)', 60, {'lo': 10, 'hi': 600, 'step': 10})],
      'jobs': {'WHM'}, 'already': r'buffactive\W+afflatus solace'},
+    {'key': 'haste', 'title': 'Haste levels and delay cap', 'group': 'Fighting',
+     'what': 'While you fight, a line in the chat when your haste changes level and whether your delay is capped with your gear and buffs: '
+             'gear (cap 25 %), magic (cap 43.75 %: low, mid, high, capped), abilities like Last Resort and Hasso (cap 25 %), counting Dual Wield. '
+             'It says how much is missing. //gs c gsd haste shows it any time, and the small window shows it too. '
+             'Buff icons don\'t say how strong a buff is, so a Haste or March it doesn\'t see cast counts as set here: a good estimate.',
+     'opts': [('tell', 'choice', 'Tell me in the chat', 'When it changes level', {'values': ['When it changes level', 'Only capped / not capped', 'Never']}),
+              ('spell', 'choice', 'A Haste it did not see cast counts as', 'Haste II', {'values': ['Haste II', 'Haste']}),
+              ('song', 'int', "Your singer's Songs+ gear", 7, {'lo': 0, 'hi': 9, 'step': 1}),
+              ('geo', 'int', 'Indi / Geo-Haste counts as (%)', 40, {'lo': 3, 'hi': 41, 'step': 1}),
+              ('blu_dw', 'int', 'A BLU\'s Dual Wield from its spells (%)', 25, {'lo': 0, 'hi': 35, 'step': 5})],
+     'jobs': MELEE, 'already': r'delay.?cap|haste.*level'},
+    {'key': 'aftermath', 'title': 'Aftermath gear (AM1 / AM2 / AM3)', 'group': 'Fighting',
+     'what': 'While you fight with Aftermath up, gear for that level goes on, and your normal set comes back when it wears off. It uses what you pick '
+             'for that level; otherwise it looks for sets named for it: sets.engaged.Liberator.AM3, sets.engaged.Liberator.AM, sets.engaged.AM3, '
+             'sets.engaged.AM (or sets.TP.AM3, if your file calls them that). A Relic\'s Aftermath has no level: the Relic line. The button below makes the missing sets from your gear with wsdist.',
+     'opts': [('auto', 'bool', 'Look for sets named for it', True, {}),
+              ('say', 'bool', 'Say in the chat when it goes up or wears off', True, {}),
+              ('set3', 'set', 'Lv.3 set', '', {'like': r'\.am3\b', 'nodefault': True}),
+              ('set2', 'set', 'Lv.2 set', '', {'like': r'\.am2\b', 'nodefault': True}),
+              ('set1', 'set', 'Lv.1 set', '', {'like': r'\.am1\b', 'nodefault': True}),
+              ('setrelic', 'set', 'Relic set', '', {'like': r'\.am\b', 'nodefault': True}),
+              ('gear3', 'gear', 'Lv.3: or these items', {}, {'slots': ['ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet']}),
+              ('gear2', 'gear', 'Lv.2: or these items', {}, {'slots': ['ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet']}),
+              ('gear1', 'gear', 'Lv.1: or these items', {}, {'slots': ['ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet']}),
+              ('gearrelic', 'gear', 'Relic: or these items', {}, {'slots': ['ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet']})],
+     'jobs': MELEE, 'already': r'CustomMeleeGroups:append|Aftermath: ?Lv|aftermath_up'},
     {'key': 'ammo', 'title': 'Low ammo warning', 'group': 'Comfort',
      'what': 'After each shot, a red warning in the chat when the ammo you use is running low.',
      'opts': [('count', 'int', 'Warn at (or below)', 20, {'lo': 5, 'hi': 99, 'step': 5})],
@@ -240,7 +267,7 @@ FEATURES = [
      'already': r'texts\.new'},
 ]
 BY_KEY = {f['key']: f for f in FEATURES}
-GROUPS = ['Safety', 'Healing', 'Modes', 'Farming', 'Casting', 'Weapon skills', 'Comfort']
+GROUPS = ['Safety', 'Healing', 'Fighting', 'Modes', 'Farming', 'Casting', 'Weapon skills', 'Comfort']
 KEY_CMD = {'dt': 'dt', 'th': 'th', 'weapons': 'weapons', 'reraise': 'reraise', 'box': 'box'}
 
 
@@ -313,7 +340,7 @@ def defaults(f, owned, set_paths):
             c = [n for n in choices(owned, extra['slot'], cat) if n.lower() in {x.lower() for x in cat}]
             out[k] = c[0] if c else ''
         elif typ == 'set':
-            out[k] = best_set(set_paths, extra.get('like', ''))
+            out[k] = '' if extra.get('nodefault') else best_set(set_paths, extra.get('like', ''))
         elif typ == 'items':
             names = []
             for src in extra.get('from', []):
@@ -392,7 +419,30 @@ def suggest(job, src, set_paths, owned):
         out['healsets'] = 'your file has healing sets, but no rule for them'
     if cures and job in ('RDM', 'PLD', 'RUN', 'BLU', 'DRK', 'NIN'):
         out['keep_tp'] = f'{job} fights and cures'
+    if job in MELEE and job != 'BRD':
+        named = [p for p in set_paths if re.search(r'haste', p, re.I)]
+        out['haste'] = f'your file has {len(named)} Haste sets: this says when they apply' if named else f'{job} fights: know when delay is capped'
+    ult = [it['en'] for it in owned if fits(it, 'main') and rema.family(it['en']) not in (None, 'Aeonic')]
+    if am_sets(set_paths):
+        out['aftermath'] = f'your file has {len(am_sets(set_paths))} Aftermath sets'
+    elif ult and job in MELEE:
+        out['aftermath'] = 'you own ' + ', '.join(sorted(set(ult))[:3])
     return out
+
+
+def am_sets(set_paths):
+    """The file's sets named for Aftermath (sets.engaged.Liberator.AM3, sets.engaged.AM)."""
+    return [p for p in set_paths if re.match(r'sets\.(engaged|tp)\b', p, re.I) and re.search(r'\.AM\d?(\.|$)', p, re.I)]
+
+
+def am_words(set_paths):
+    """For the job page and the Aftermath feature."""
+    found = am_sets(set_paths)
+    if not found:
+        return 'No sets named for Aftermath in this file yet.'
+    modes = {'engaged', 'tp', 'sets', 'haste', 'acc', 'mid', 'pdt', 'dt', 'dw', 'sw'}
+    weapons = sorted({w for p in found for w in fixer._path_parts(p) if w.lower() not in modes and not re.match(r'^AM\d?$', w, re.I)})
+    return f"{len(found)} set{'s' if len(found) != 1 else ''} named for Aftermath in this file" + (f" ({', '.join(weapons)})" if weapons else '') + '.'
 
 
 LOGIC = re.compile(r'\bif\b|equip\s*\(|==|~=|buffactive|send_command|windower\.|disable\s*\(|state\.|cancel', re.I)
@@ -640,11 +690,13 @@ function SIM_NEW(src, name, engine)
   e.player = { status = 'Idle', tp = 1000, name = 'Tester', main_job = 'WAR', sub_job = 'NIN', equipment = ci({}) }
   e.buffactive = ci({})
   e.world = { weather_element = 'None', day_element = 'Light', weather_intensity = 1 }
-  S.me = { id = 1, x = 0, y = 0, status = 0, vitals = { hpp = 100, mpp = 100 } }
+  S.me = { id = 1, x = 0, y = 0, status = 0, vitals = { hpp = 100, mpp = 100 }, buffs = {} }
+  S.eq, S.bag, S.desc, S.ritems, S.augs = {}, {}, {}, {}, {}
   S.recasts = {}
   S.mobs = {}
   e.windower = setmetatable({
-    ffxi = { get_player = function() return { id = S.me.id, status = S.me.status, vitals = S.me.vitals } end,
+    ffxi = { get_player = function() return { id = S.me.id, status = S.me.status, vitals = S.me.vitals, buffs = S.me.buffs } end,
+             get_items = function(a, b) if a == 'equipment' then return S.eq end return S.bag[b] end,
              get_mob_by_target = function(t) if t == 'me' then return S.me end return S.mobs[t] end,
              get_spell_recasts = function() return S.recasts end, get_ability_recasts = function() return S.recasts end },
     raw_register_event = function(n, f) S.events[n] = f return 1 end,
@@ -660,7 +712,8 @@ function SIM_NEW(src, name, engine)
     return true
   end
   e.require = function() return ANY end
-  e.gearswap = { equip_list = S.equip }
+  e.gearswap = { equip_list = S.equip, res = { item_descriptions = S.desc, items = S.ritems },
+                 extdata = { decode = function(it) return { augments = S.augs[it.id] } end } }
   setmetatable(e, { __index = function(t, k) return ANY end })
   e._G = e
   S.env = e
@@ -729,7 +782,9 @@ def simulate_src(src, name, engine):
     run('status_change', 'Engaged', 'Idle')
     run('buff_change', 'Doom', True)
     run('buff_change', 'Doom', False)
-    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock'):
+    run('buff_change', 'Aftermath: Lv.3', True)
+    run('buff_change', 'Aftermath: Lv.3', False)
+    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste'):
         run('self_command', c)
     ok, e = L.globals().SIM_TICK(S)
     if not ok and 'gsd-features' in str(e):
@@ -750,7 +805,7 @@ NEEDS = {'doom': ('gear',), 'sleep': ('gear',), 'kiting': ('gear', 'set'), 'refr
 COMMANDS = {'dt': ['//gs c gsd dt'], 'th': ['//gs c gsd th', '//gs c gsd th off / tag / always'],
             'weapons': ['//gs c gsd weapons'], 'reraise': ['//gs c gsd reraise'],
             'rings': ['//gs c gsd warp', '//gs c gsd dim', '//gs c gsd xp', '//gs c gsd cp', '//gs c gsd unlock'],
-            'box': ['//gs c gsd box']}
+            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste']}
 
 
 def missing(conf):

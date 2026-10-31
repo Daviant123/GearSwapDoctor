@@ -94,9 +94,14 @@ STAT_RX = [
     ('skill', r'Healing magic skill ?\+(\d+)'), ('MND', r'\bMND ?\+(\d+)'), ('VIT', r'\bVIT ?\+(\d+)'), ('CHR', r'\bCHR ?\+(\d+)'),
     ('HP', r'(?<![A-Za-z"])HP ?\+(\d+)'), ('MP', r'(?<![A-Za-z"])MP ?\+(\d+)'), ('fast', r'"Fast Cast" ?\+(\d+)'),
     ('quick', r'(?:Occ\. quickens spellcasting|"?Quick Magic"?) ?\+(\d+)'), ('conserve', r'"Conserve MP" ?\+(\d+)'),
-    ('haste', r'\bHaste ?\+(\d+)'), ('pdt', r'(?:Physical Damage taken|Phys\. dmg\. taken) ?-(\d+)'),
-    ('mdt', r'(?:Magic Damage taken|Magic dmg\. taken|Mag\. dmg\. taken) ?-(\d+)'),
-    ('dt', r'(?<![A-Za-z.] )(?:Damage taken|Dmg\. taken) ?-(\d+)'), ('waltz', r'"?Waltz"? potency ?\+(\d+)'),
+    ('haste', r'\bHaste ?\+(\d+)'), ('pdt', r'(?:Physical [Dd]amage taken|Phys\. dmg\. taken|\bPDT) ?-(\d+)'),
+    ('mdt', r'(?:Magic [Dd]amage taken|Magic dmg\. taken|Mag\. dmg\. taken|\bMDT) ?-(\d+)'),
+    ('dt', r'(?<![A-Za-z.] )(?:Damage taken|Dmg\. taken|\bDT) ?-(\d+)'),
+    # (the II kinds go past the 50 % cap)
+    ('pdt2', r'Physical [Dd]amage taken II ?-(\d+)'), ('mdt2', r'Magic [Dd]amage taken II ?-(\d+)'), ('dt2', r'(?<![A-Za-z.] )Damage taken II ?-(\d+)'),
+    # idle sets (idle.py)
+    ('refresh', r'(?:"Refresh"|\bRefresh) ?\+(\d+)'), ('regen', r'(?:"Regen"|\bRegen) ?\+(\d+)'), ('meva', r'Magic Evasion ?\+(\d+)'),
+    ('mdb', r'"Magic Def\.? Bonus" ?\+(\d+)'), ('move', r'Movement speed ?\+(\d+)'), ('waltz', r'"?Waltz"? potency ?\+(\d+)'),
     ('waltz_received', r'(?:"Waltz" potency received|Potency of "Waltz" effects received) ?\+(\d+)'), ('cursna', r'"Cursna" ?\+(\d+)'),
     ('regen_potency', r'"Regen" potency ?\+(\d+)'), ('regen_duration', r'"Regen" (?:effect )?duration ?\+(\d+)'),
     ('solace', r'"Afflatus Solace" ?\+(\d+)'), ('sird', r'[Ss]pell interruption rate (?:down )?-?(\d+)'),
@@ -105,7 +110,7 @@ STAT_RX = [(k, re.compile(rx)) for k, rx in STAT_RX]
 ENMITY_RX = re.compile(r'Enmity ?([+\-]\d+)')
 # what doesn't count: a set bonus, Unity, a latent effect, a pet's or a place's bonus
 CUT_RX = re.compile(r'(?:\bSet:|Unity Ranking:|Latent effect|Pet:|Avatar:|Wyvern:|Automaton:|Enchantment:|Reives:|Campaign:|Assault:|'
-                    r'Salvage:|Dynamis[^:]{0,20}:|Besieged:|Nighttime:|Daytime:)')
+                    r'Salvage:|Dynamis[^:]{0,20}:|Besieged:|Nighttime:|Daytime:|Dusk[^:]{0,12}:|Dawn[^:]{0,12}:|\bOn [A-Za-z]+:)')
 
 MP_RX = re.compile(r'"Cure" MP consumed \+(\d+)')
 
@@ -123,6 +128,14 @@ def parse_text(text):
     n = sum(int(x) for x in ENMITY_RX.findall(text))
     if n:
         out['enmity'] = n
+    # (no number in the text: Stikini Ring and the like give 1; plain movement speed gear is the old 12 %)
+    for word, key in (('Refresh', 'refresh'), ('Regen', 'regen')):
+        if f'Adds "{word}" effect' in text:
+            out[key] = out.get(key, 0) + 1
+    if 'Increases movement speed' in text and 'move' not in out:
+        out['move'] = 12
+    if 'Decreases movement speed' in text or 'Reduces movement speed' in text:
+        out['slowed'] = 12
     if 'Enhances "Cursna" effect' in text and 'cursna' not in out:
         out['cursna_unknown'] = 1
     return out
@@ -310,7 +323,8 @@ def cursna_rate(t, base):
 
 def dt_totals(t):
     """(physical, magic) damage taken of the set, as positive "% less", capped."""
-    return min(CAP_DT, t.get('dt', 0) + t.get('pdt', 0)), min(CAP_DT, t.get('dt', 0) + t.get('mdt', 0))
+    return (min(CAP_DT, t.get('dt', 0) + t.get('pdt', 0)) + t.get('pdt2', 0) + t.get('dt2', 0),
+            min(CAP_DT, t.get('dt', 0) + t.get('mdt', 0)) + t.get('mdt2', 0) + t.get('dt2', 0))
 
 
 def cast_total(t, base, cures=True):
@@ -336,6 +350,9 @@ def evaluate(kind, gear, base, spell=None, solace=False):
         v = round(cursna_rate(t, base), 1)
     elif kind == 'regen':
         v = t.get('regen_potency', 0) + t.get('regen_duration', 0) / 100
+    elif kind == 'idle':
+        import idle
+        v = idle.value(gear, spell, base)
     else:
         raise ValueError(kind)
     return v, t

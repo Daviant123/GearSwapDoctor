@@ -1,0 +1,54 @@
+# Builds the Linux version of GearSwap Doctor on GitHub's own machines when a release is published, checks it starts, and adds it to that release.
+name: Linux build
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release to add the Linux build to (like v2.10.0)
+        required: true
+permissions:
+  contents: write
+jobs:
+  linux:
+    runs-on: ubuntu-22.04      # (the older Ubuntu: what's built here runs on newer systems, not the other way round)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          pip install pyinstaller lupa numpy certifi
+          cd source
+          pyinstaller --noconfirm --onefile --windowed --name GearSwap-Doctor \
+            --add-data gsd_features.lua:. --add-data gsd.png:. \
+            --collect-all lupa --collect-data certifi --hidden-import certifi --hidden-import tkinter \
+            --exclude-module matplotlib --exclude-module numba \
+            --hidden-import numpy --hidden-import datetime --hidden-import random --hidden-import pickle --hidden-import importlib \
+            --hidden-import inspect --hidden-import csv --hidden-import types --hidden-import contextlib --hidden-import io \
+            --hidden-import difflib --hidden-import urllib.request --hidden-import json \
+            --distpath ../dist --workpath ../build --specpath ../build --paths . gsd_app.py
+      - name: Check it works
+        run: |
+          # the Lua and the features code are in it (no Windower here: that part of the self test can't pass)
+          GSD_SELFTEST="$PWD/selftest.json" xvfb-run -a ./dist/GearSwap-Doctor
+          cat selftest.json
+          python -c "import json; d = json.load(open('selftest.json')); assert d['frozen'] and d['lua'] == [], d"
+          # the window opens and stays open (124 = still running when the time was up)
+          set +e
+          timeout 20 xvfb-run -a ./dist/GearSwap-Doctor
+          code=$?
+          echo "exit code $code"
+          test "$code" = 124
+      - name: Add it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          cp LINUX.md dist/README.txt
+          tar -C dist -czf GearSwap-Doctor-linux.tar.gz GearSwap-Doctor README.txt
+          gh release upload "$TAG" GearSwap-Doctor-linux.tar.gz --clobber

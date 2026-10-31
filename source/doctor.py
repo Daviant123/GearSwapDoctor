@@ -256,7 +256,8 @@ def plan_set(names, path, gear, job, sub, owned_ids, items, index, buffs=None, w
         spec['set_haste'] = r['haste']
         more.append("delay capped: it's a Haste set, so gear haste doesn't decide it" if r['haste'] == 'cap'
                     else f"magic haste {r['haste']}%, from the set's name")
-    if r['acc'] or r['mid']:
+    # (an Aftermath set too: built for damage, one simulator's Lv.3 set came out 130 accuracy lower - FFXIAH, 57175)
+    if r['acc'] or r['mid'] or r['am'] is not None:
         spec['keep_accuracy'] = True
     out['notes'] = more + notes
     return out
@@ -383,6 +384,50 @@ def tp_ws_damage(loaded, job, sub, cur, owned_ids, items, index, ws_tp, enemy, b
             out = None
     if cache is not None:
         cache[key] = out
+    return out
+
+
+_IDLE_DATA = None
+
+
+def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
+    """[{set, ws: 'Idle: <set>', kind: 'idle', now, best, gain, unit: 'idle', now_text, best_text, changes, notes, dt...}] for idle sets with a better owned set.
+    Not wsdist: idle.py, on the game's item text. targets: the damage taken he set for them (the new set must reach it)."""
+    global _IDLE_DATA
+    import healing
+    import idle
+    import wsdist_runner as W
+    if _IDLE_DATA is None:
+        _IDLE_DATA = healing.ItemData()
+    counts, seen = {}, set()
+    for b, c in bags.items():
+        if not b.startswith('_') and b in checks.EQUIP_BAGS:
+            for iid, n in c.items():
+                it = items.by_id.get(iid)
+                if it:
+                    counts[it['en']] = counts.get(it['en'], 0) + n
+                    seen.add(iid)
+    owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
+    out = []
+    todo = idle.checked_sets(loaded)
+    wanted = [s for s in loaded.sets if idle.is_idle(s['path']) and (targets or {}).get(s['path']) and s not in todo]
+    for s in todo + wanted:
+        target = (targets or {}).get(s['path']) or {}
+        need = {k: min(50, int(target.get(k) or 0)) for k in ('dt', 'pdt', 'mdt') if target.get(k)}
+        r = idle.judge(s['path'], s['gear'], job, sub, cands, counts, items, _IDLE_DATA, need=need, keep_weapons=True if target.get('main') or target.get('sub') else None)
+        if stats is not None:
+            stats.setdefault('judged', []).append({'set': s['path'], 'focus': r['focus'], 'now': idle.words(r['n_now'], r['base']), 'best': idle.words(r['n_best'], r['base'])})
+        gain = (r['val'] - r['now']) / r['now'] * 100 if r['now'] else (100 if r['val'] > 0 else 0)
+        req = W.dt_requirement(target)
+        info = {'now': (-r['n_now']['pdt'], -r['n_now']['mdt']), 'best': (-r['n_best']['pdt'], -r['n_best']['mdt'])}
+        dtf = _dt_fields(info, req)
+        dt_fix = bool(req) and not dtf.get('dt_was_met') and bool(r['changes'])
+        if r['changes'] and (gain >= 1 or dt_fix):
+            changes = {k: (v['name'] if isinstance(v, dict) else v) for k, v in r['changes'].items()}
+            out.append(dict({'set': s['path'], 'ws': 'Idle: ' + s['path'][len('sets.'):], 'kind': 'idle', 'now': r['now'], 'best': r['val'], 'gain': round(gain, 1), 'unit': 'idle',
+                             'now_text': idle.words(r['n_now'], r['base']), 'best_text': idle.words(r['n_best'], r['base']), 'changes': changes, 'notes': r['notes'],
+                             'dt_fix': dt_fix}, **dtf))
     return out
 
 
@@ -519,6 +564,79 @@ def tp_weapons(loaded):
     return weapons, main_ws
 
 
+def am_missing(loaded, job, sub, owned_ids, items, index, prefer=None):
+    """The Aftermath sets this file could have for the Ultimate Weapons he owns: ({'path', 'base', 'weapon', 'family'} to make, the weapons that
+    have one). A weapon with its own sets gets <its set>.AM3 (.AM for a Relic), as his DRK file names them; a file with no weapon sets gets one
+    sets.engaged.AM3 (sets.TP.AM3 if it calls them that), for his strongest. Aeonic: nothing wsdist can count. A set is only made beside one that exists, so the file's rules still work."""
+    import rema
+    import set_name
+    names = set_name.FileInfo(loaded, index)
+    paths = [s['path'] for s in loaded.sets if is_tp_set(s['path'])]
+    bases = {}
+    for p in sorted(paths, key=lambda x: (x.count('.'), len(x))):
+        r = names.read(p)
+        if r['weapon'] and not r['modes'] and not r['form']:
+            bases.setdefault(r['weapon'], p)
+    ultimate = [e for e in _best_owned(tuple(set(set_name.KINDS.values())), job, owned_ids, items, index, names)
+                if rema.family(e['Name']) not in (None, 'Aeonic')]
+    # the one his file uses comes first: named in a set's main hand, then with a weapon skill set (his BLU: Tizona, though Almace hits harder on paper)
+    ws_paths = ' '.join(s['path'] for s in loaded.sets if '.WS' in s['path'] or 'WS[' in s['path'])
+    in_hand = [g['name'].lower() for s in loaded.sets for k, g in s['gear'].items() if k.lower() == 'main']
+    ultimate.sort(key=lambda e: (e['Name'].lower() != (prefer or '').lower(), -in_hand.count(e['Name'].lower()),
+                                 (rema.linked_ws(e['Name']) or '') not in ws_paths))
+    plain = any(names.read(p)['am'] is not None and not names.label(names.read(p)) for p in paths)
+    # the set the rest are like: sets.engaged, or sets.TP.Standard in a file with its own modes
+    usual = [p for p in paths if not names.label(names.read(p)) and not any(m in names.read(p)['modes'] for m in ('Acc', 'Mid', 'DT', 'Haste', 'AM'))
+             and not names.read(p)['reraise']]
+    usual.sort(key=lambda p: (p.count('.'), not re.search(r'standard|normal|melee', p, re.I), len(p)))
+    out, have, one = [], [], False
+    for e in ultimate:
+        w, fam = e['Name'], rema.family(e['Name'])
+        token = 'AM' if fam == 'Relic' else 'AM3'
+        if w in names.with_am:
+            have.append(w)
+        elif w in bases:
+            out.append({'path': f'{bases[w]}.{token}', 'base': bases[w], 'weapon': w, 'family': fam})
+        elif w in names.named:
+            continue                                                  # (its sets all have modes in their names: his to name)
+        elif plain:
+            have.append(w)
+        elif usual and not one:
+            one = True
+            import fixer
+            out.append({'path': f'sets.{fixer._path_parts(usual[0])[1]}.{token}', 'base': usual[0], 'weapon': w, 'family': fam})
+    return out, have
+
+
+def am_build(loaded, m, job, sub, owned_ids, items, index, buffs=None, ws_tp=1000, enemy='Apex Toad', metric='time'):
+    """One missing Aftermath set (am_missing) from his gear: m plus 'gear' {slot: item}, 'now', 'best', 'unit', 'notes'. What wsdist doesn't know stays."""
+    import gs_loader as G
+    import set_name
+    import wsdist_runner as W
+    names = set_name.FileInfo(loaded, index)
+    base = next(s['gear'] for s in loaded.sets if s['path'] == m['base'])
+    weapons, main_ws = tp_weapons(loaded)
+    plan = plan_set(names, m['path'], with_weapons(base, {'main': m['weapon']}), job, sub, owned_ids, items, index,
+                    dict(buffs or {}, aftermath='auto'), None, weapons, main_ws)
+    if plan['error']:
+        raise ValueError(plan['error'])
+    info = {}
+    wsd = tp_ws_damage(loaded, job, sub, plan['cur'], owned_ids, items, index, ws_tp, enemy, plan['spec'], {})
+    best, val, now = W.best_tp_set(job, sub, plan['owned'], plan['cur'], ws_tp=ws_tp, enemy_name=enemy, metric=metric, info=info,
+                                   buffs=plan['spec'], ws_damage=wsd)
+    gear = {}
+    for key, g in base.items():                                       # (what wsdist doesn't know: as in the set it's made from)
+        slot = G.SLOTS.get(key.lower())
+        if slot and slot not in ('main', 'sub', 'range') and W.SLOT_MAP.get(slot) not in plan['cur']:
+            gear[slot] = g['name']
+    for slot, e in best.items():
+        gs = W.GS_SLOT.get(slot)
+        if gs and gs not in ('main', 'sub', 'range') and e and e.get('Name') != 'Empty':
+            gear[gs] = _gs_name(e, items)
+    notes = [n.replace('(the set itself has it)', "(the weapon this set is for)") for n in plan['notes']]
+    return dict(m, gear=gear, now=now, best=val, unit=info.get('metric', metric), notes=notes + _am_notes(info))
+
+
 def plan_tp(job, sub, gear, weapons, main_ws, owned_ids, items, index):
     """wsdist_runner.plan_ws for a TP set: any weapon from the weapon sets, else the file's main weapon skill's."""
     import wsdist_runner as W
@@ -534,7 +652,7 @@ def _am_notes(info):
     if info.get('abilities'):
         out.append(info['abilities'])
     if info.get('accuracy') is not None:
-        out.append(f"this set is for accuracy: kept at {info['accuracy']:.0f} or more")
+        out.append(f"accuracy kept at {info['accuracy']:.0f} or more")
     if info.get('time'):
         out.append(f"time to a weapon skill: {info['time'][0]:.1f} s -> {info['time'][1]:.1f} s")
     return out
@@ -628,7 +746,10 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
                                                  enemy=enemy, metric=tp_metric, targets=tg, buffs=spec, stats=tp_stats)
                 entry.update(tp_total=tp_stats['total'], tp_checked=tp_stats['checked'], tp_not_checked=tp_stats['not_checked'],
                              tp_stopped=tp_stats['stopped'])
+            idle_stats = {}
+            entry['upgrades'] += idle_upgrades(loaded, job, js, bags, items, targets=tg, stats=idle_stats)
             entry['judged'] = ws_stats.get('judged', []) + tp_stats.get('judged', [])
+            entry['idle_judged'] = idle_stats.get('judged', [])
             entry['sub'] = js
         report['files'].append(entry)
     os.makedirs(DATA, exist_ok=True)
