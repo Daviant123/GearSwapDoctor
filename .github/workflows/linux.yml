@@ -25,13 +25,13 @@ jobs:
           pip install pyinstaller lupa numpy certifi
           cd source
           pyinstaller --noconfirm --onefile --windowed --name GearSwap-Doctor \
-            --add-data gsd_features.lua:. --add-data gsd.png:. \
+            --add-data "$PWD/gsd_features.lua:." --add-data "$PWD/gsd.png:." \
             --collect-all lupa --collect-data certifi --hidden-import certifi --hidden-import tkinter \
             --exclude-module matplotlib --exclude-module numba \
             --hidden-import numpy --hidden-import datetime --hidden-import random --hidden-import pickle --hidden-import importlib \
             --hidden-import inspect --hidden-import csv --hidden-import types --hidden-import contextlib --hidden-import io \
             --hidden-import difflib --hidden-import urllib.request --hidden-import json \
-            --distpath ../dist --workpath ../build --specpath ../build --paths . gsd_app.py
+            --distpath ../dist --workpath ../build --specpath ../build --paths "$PWD" "$PWD/gsd_app.py"
       - name: Check it works
         run: |
           # the Lua and the features code are in it (no Windower here: that part of the self test can't pass)
