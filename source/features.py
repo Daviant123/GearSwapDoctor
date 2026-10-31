@@ -201,6 +201,31 @@ FEATURES = [
               ('wait', 'int', 'Seconds before using it', 11, {'lo': 5, 'hi': 20, 'step': 1}),
               ('lock', 'items', 'Lock these when worn', [], {'from': ['warp', 'dim', 'xp', 'cp'], 'extra': ['Nexus Cape']})],
      'already': r"Warp Ring.*disable|disable.*ring|Echad Ring|Trizek Ring"},
+    {'key': 'cure_down', 'title': 'Lower cure when one can\'t go off', 'group': 'Healing',
+     'what': 'You cast a cure that is on recast, or you have too little MP (or TP for a Waltz): the next lower one is cast '
+             'on the same target instead - Cure V on recast becomes Cure IV, no lost time. Cures, Curagas and Waltzes.',
+     'opts': [('say', 'bool', 'Say so in the chat', True, {})], 'jobs': CASTERS | {'DNC', 'WAR', 'SAM', 'THF'},
+     'already': r'cure_down|refine_cure|get_spell_recasts|spell_recasts'},
+    {'key': 'healsets', 'title': 'Healing sets go on for healing spells', 'group': 'Healing',
+     'what': 'Which of your sets goes on for what: fast cast when a cure starts, your cure set when it lands, Curaga, Cursna, '
+             'Regen, Waltz. For a file with no rules for them. (Mote and Selindrile files already do this: no need there.)',
+     'opts': [('precast', 'set', 'Starting a cure (fast cast)', '', {'like': r'precast.*(fc|cure)|fastcast'}),
+              ('cure', 'set', 'Cure', '', {'like': r'cure(?!_rec)|healing'}),
+              ('curaga', 'set', 'Curaga', '', {'like': r'curaga'}),
+              ('cursna', 'set', 'Cursna', '', {'like': r'cursna'}),
+              ('regen', 'set', 'Regen', '', {'like': r'midcast.*regen'}),
+              ('waltz', 'set', 'Waltz', '', {'like': r'waltz'})],
+     'already': r'spell\.english.*Cure|name.*Cure|Cure.*spell\.|spellMap.*Cure'},
+    {'key': 'keep_tp', 'title': 'Keep your weapons (and TP) when curing', 'group': 'Healing',
+     'what': 'Changing your main weapon throws away your TP. With this much TP or more, a cure set\'s weapons are not put on: '
+             'the rest of the set is. Good for anyone who fights and cures.',
+     'opts': [('tp', 'int', 'From TP', 100, {'lo': 0, 'hi': 3000, 'step': 100})],
+     'jobs': {'RDM', 'PLD', 'RUN', 'BLU', 'DRK', 'NIN', 'BRD', 'COR', 'SCH', 'WHM', 'GEO'}, 'already': r'player\.tp.*(Cure|cure)'},
+    {'key': 'solace', 'title': 'Afflatus Solace reminder (WHM)', 'group': 'Healing',
+     'what': 'A red line in the chat when a WHM casts a cure without Afflatus Solace on: its stoneskin and cure power are too '
+             'good to forget. It only reminds you.',
+     'opts': [('every', 'int', 'At most every (seconds)', 60, {'lo': 10, 'hi': 600, 'step': 10})],
+     'jobs': {'WHM'}, 'already': r'buffactive\W+afflatus solace'},
     {'key': 'ammo', 'title': 'Low ammo warning', 'group': 'Comfort',
      'what': 'After each shot, a red warning in the chat when the ammo you use is running low.',
      'opts': [('count', 'int', 'Warn at (or below)', 20, {'lo': 5, 'hi': 99, 'step': 5})],
@@ -215,7 +240,7 @@ FEATURES = [
      'already': r'texts\.new'},
 ]
 BY_KEY = {f['key']: f for f in FEATURES}
-GROUPS = ['Safety', 'Modes', 'Farming', 'Casting', 'Weapon skills', 'Comfort']
+GROUPS = ['Safety', 'Healing', 'Modes', 'Farming', 'Casting', 'Weapon skills', 'Comfort']
 KEY_CMD = {'dt': 'dt', 'th': 'th', 'weapons': 'weapons', 'reraise': 'reraise', 'box': 'box'}
 
 
@@ -358,6 +383,15 @@ def suggest(job, src, set_paths, owned):
         out['rings'] = 'you own ' + ', '.join(rg[:3])
     if job in ('COR', 'RNG'):
         out['ammo'] = f'{job} shoots'
+    cures = re.search(r'\bCure\b|Curaga|Curing Waltz', src)
+    if cures and job in BY_KEY['cure_down']['jobs']:
+        out['cure_down'] = 'your file has cures'
+    if job == 'WHM':
+        out['solace'] = 'WHM: Afflatus Solace'
+    if sty == 'plain' and best_set(set_paths, r'cure|curaga|cursna') and not re.search(r'spell\.english.*Cure|Cure.*spell\.', src):
+        out['healsets'] = 'your file has healing sets, but no rule for them'
+    if cures and job in ('RDM', 'PLD', 'RUN', 'BLU', 'DRK', 'NIN'):
+        out['keep_tp'] = f'{job} fights and cures'
     return out
 
 
@@ -607,10 +641,12 @@ function SIM_NEW(src, name, engine)
   e.buffactive = ci({})
   e.world = { weather_element = 'None', day_element = 'Light', weather_intensity = 1 }
   S.me = { id = 1, x = 0, y = 0, status = 0, vitals = { hpp = 100, mpp = 100 } }
+  S.recasts = {}
   S.mobs = {}
   e.windower = setmetatable({
     ffxi = { get_player = function() return { id = S.me.id, status = S.me.status, vitals = S.me.vitals } end,
-             get_mob_by_target = function(t) if t == 'me' then return S.me end return S.mobs[t] end },
+             get_mob_by_target = function(t) if t == 'me' then return S.me end return S.mobs[t] end,
+             get_spell_recasts = function() return S.recasts end, get_ability_recasts = function() return S.recasts end },
     raw_register_event = function(n, f) S.events[n] = f return 1 end,
     register_event = function(n, f) S.events[n] = f return 1 end,
   }, anymt)
@@ -683,7 +719,10 @@ def simulate_src(src, name, engine):
     tgt = L.table_from({'type': 'MONSTER', 'id': 5, 'distance': 3, 'spawn_type': 16, 'name': 'Mob'})
     ws = spell(english='Savage Blade', type='WeaponSkill', action_type='Ability', element='Light', target=tgt)
     nuke = spell(english='Fire VI', type='BlackMagic', action_type='Magic', skill='Elemental Magic', element='Fire', target=tgt)
-    for sp in (ws, nuke):
+    cure = spell(english='Cure V', type='WhiteMagic', action_type='Magic', skill='Healing Magic', element='Light', mp_cost=135, recast_id=5,
+                 target=L.table_from({'type': 'SELF', 'raw': '<me>', 'name': 'Tester', 'id': 1}))
+    wz = spell(english='Curing Waltz III', type='Waltz', action_type='Ability', tp_cost=500, recast_id=217, target=tgt)
+    for sp in (ws, nuke, cure, wz):
         run('precast', sp)
         run('midcast', sp)
         run('aftercast', sp)

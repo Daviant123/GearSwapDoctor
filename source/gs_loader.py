@@ -101,7 +101,8 @@ local function sandbox()
   end
   e.unpack = e.unpack or table.unpack
   e.sets = setmetatable({}, { __index = setmt.__index, __newindex = setmt.__newindex, __path = 'sets' })
-  e.gear = {}
+  -- gear.xxx is made by Mote-Globals / a player's globals (gear.default.obi_waist, gear.DarkRing.name = ...): a stand-in for those
+  e.gear = setmetatable({}, { __index = function(t, k) local v = {} rawset(t, k, v) return v end })
   e.set_combine = set_combine
   -- Windower's sets (S{...}): membership plus the methods job files call on them
   local setmethods = { contains = function(self, v) return rawget(self, v) == true end,
@@ -189,6 +190,19 @@ function GS_WALK(env, slots)
     end
   end
   walk(rawget(env, 'sets'), 'sets')
+  -- the file's own lists of names (gsList = S{'Ragnarok', ...}, or a plain list): what the job file says about its weapons
+  LISTS = {}
+  for name, v in pairs(env) do
+    if type(name) == 'string' and type(v) == 'table' and name ~= '_G' then
+      local names, ok = {}, true
+      for k, x in next, v do
+        if type(k) == 'string' and x == true then names[#names + 1] = k
+        elseif type(k) == 'number' and type(x) == 'string' then names[#names + 1] = x
+        else ok = false break end
+      end
+      if ok and #names > 0 then LISTS[name] = names end
+    end
+  end
   -- broken references: made on demand, never filled, and used as a set
   local broken = {}
   for _, g in ipairs(GHOSTS) do
@@ -208,6 +222,7 @@ class Loaded:
         self.broken = []        # [{'path', 'line'}]
         self.error = None       # the file didn't load: Lua's message
         self.warnings = []      # a setup function failed (the sets made before it are still read)
+        self.lists = {}         # the file's own lists of names: {'gsList': ['Ragnarok', ...]}
 
 
 _lua = None
@@ -263,6 +278,10 @@ def load(path):
         res.sets.append({'path': str(s.path), 'gear': gear})
     for i in range(1, len(broken) + 1):
         res.broken.append({'path': str(broken[i].path), 'line': int(broken[i].line)})
+    lists = L.globals().LISTS
+    for name in list(lists):
+        names = lists[name]
+        res.lists[str(name)] = sorted(str(names[j]) for j in range(1, len(names) + 1))
     res.sets.sort(key=lambda s: s['path'])
     return res
 

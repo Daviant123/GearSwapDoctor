@@ -156,7 +156,18 @@ def _value_end(src, i):
 
 
 def _lua_str(name):
+    """An item as Lua: "Name", or { name="Name", augments={'...','...'} } when it's one augmented copy (a dict)."""
+    if isinstance(name, dict):
+        aug = ','.join("'" + str(a).replace('\\', '\\\\').replace("'", "\\'") + "'" for a in name.get('augments') or [])
+        return '{ name=' + _lua_str(name['name']) + (', augments={' + aug + ',}' if aug else '') + ' }'
     return '"' + name.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def item_text(v):
+    """An item as words, for the lists he sees."""
+    if isinstance(v, dict):
+        return v['name'] + (' (' + ', '.join(str(a) for a in v.get('augments') or []) + ')' if v.get('augments') else '')
+    return str(v)
 
 
 def set_slots(src, path, changes):
@@ -179,6 +190,60 @@ def set_slots(src, path, changes):
             body = '{' + keys[0] + '=' + _lua_str(name) + (',' if body[1:].strip()[:1] not in ('}', '') else '') + body[1:]
         mask = _code_positions(body)
     return src[:start] + body + src[end + 1:]
+
+
+def _statement_end(src, path):
+    "(end of the line where this set's statement ends, its indent); None when the file doesn't make it."
+    mask = _code_positions(src)
+    hits = [m for m in _path_regex(path).finditer(src) if mask[m.start()]]
+    if not hits:
+        return None
+    m = hits[-1]
+    i = m.end()
+    if src.startswith('{', i):
+        end = _match(src, i, '{', '}') + 1
+    elif src.startswith('set_combine', i):
+        end = _match(src, src.index('(', i), '(', ')') + 1
+    else:
+        end = i
+    nl = src.find('\n', end)
+    line_start = src.rfind('\n', 0, m.start()) + 1
+    return (len(src) if nl < 0 else nl), re.match(r'[ \t]*', src[line_start:]).group(0)
+
+
+def add_new_set(src, new_path, gear, anchors):
+    """A set the file doesn't have yet (sets.midcast.Cursna): after the last set beside it, else after the set it goes under,
+    else after one of the file's other sets (anchors: the file's sets). Tables it needs that the file doesn't make get a
+    harmless line first: sets.midcast = sets.midcast or {}."""
+    mask = _code_positions(src)
+    if any(mask[m.start()] for m in _path_regex(new_path).finditer(src)):
+        raise EditError(f'{new_path} is in the file already')
+    parts = _path_parts(new_path)
+    parents = ['.'.join(parts[:i]) for i in range(2, len(parts))]
+    spots = []
+    if parents:
+        for a in anchors:
+            if a.startswith(parents[-1] + '.') or a.startswith(parents[-1] + '['):
+                s = _statement_end(src, a)
+                if s:
+                    spots.append(s)
+    for p in reversed(parents):
+        if not spots:
+            s = _statement_end(src, p)
+            if s:
+                spots.append(s)
+    if not spots:
+        for a in anchors:
+            s = _statement_end(src, a)
+            if s:
+                spots.append(s)
+    if not spots:
+        raise EditError(f"no place for {new_path} in the file: it doesn't make any sets itself")
+    end, indent = max(spots, key=lambda x: x[0])
+    lines = [f'{indent}{p} = {p} or {{}}' for p in parents if not any(mask[m.start()] for m in _path_regex(p).finditer(src))]
+    order = [s for s in SLOT_KEYS if s in gear]
+    lines.append(indent + new_path + ' = {' + ', '.join(f'{s}={_lua_str(gear[s])}' for s in order) + '}')
+    return src[:end] + '\n' + '\n'.join(lines) + src[end:]
 
 
 def add_set(src, after, new_path, gear):
@@ -258,10 +323,13 @@ def apply(path, edits):
                 done.append(f'{e[1]} -> {e[2]}')
             elif e[0] == 'slots':
                 new = set_slots(new, e[1], e[2])
-                done.append(f'{e[1]}: ' + ', '.join(f'{k} {v}' for k, v in e[2].items()))
+                done.append(f'{e[1]}: ' + ', '.join(f'{k} {item_text(v)}' for k, v in e[2].items()))
             elif e[0] == 'add':
                 new = add_set(new, e[1], e[2], e[3])
                 done.append(f'new set {e[2]}')
+            elif e[0] == 'new':
+                new = add_new_set(new, e[1], e[2], e[3])
+                done.append(f'new set {e[1]}')
         except EditError as x:
             failed.append(str(x))
     if new == src:

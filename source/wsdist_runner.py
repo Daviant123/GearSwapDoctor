@@ -10,9 +10,11 @@ import contextlib
 import io
 import os
 import sys
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 import paths  # noqa: E402
+import rema  # noqa: E402
 WS_DIR = paths.WSDIST
 
 # wsdist slot names <- GearSwap slot names
@@ -22,10 +24,17 @@ SLOT_MAP = {'main': 'main', 'sub': 'sub', 'range': 'ranged', 'ammo': 'ammo', 'he
 GS_SLOT = {v: k for k, v in SLOT_MAP.items()}
 
 _mods = None
+_LOADING = threading.RLock()
 
 
 def _wsdist():
-    """Import wsdist from ./wsdist (once)."""
+    """Import wsdist from ./wsdist (once). One thread at a time: the app loads it in the background, and a click can ask for it
+    meanwhile (loading changes the folder and hides printed text; two at once left the text hidden for good)."""
+    with _LOADING:
+        return _load_wsdist()
+
+
+def _load_wsdist():
     global _mods
     if _mods is None:
         cwd = os.getcwd()
@@ -65,7 +74,54 @@ def _wsdist():
         finally:
             os.chdir(cwd)
         _mods = {'gear': gear, 'wsdist': wsdist, 'create_player': create_player, 'enemies': enemies, 'actions': actions, 'buffs': buffs}
+        _add_overall_dps(_mods)
     return _mods
+
+
+OVERALL_DPS = 'Overall DPS'
+
+
+def _add_overall_dps(mods):
+    """One more way for wsdist to judge a TP set: damage per second with the weapon skills in it. Its own "Time to WS" can't see
+    an Aftermath that only adds damage, and its "DPS" leaves out TP ("you really need to include TP and WS phases together",
+    its code says). Auto-attacks per second + the weapon skill's damage (abilities['GSD WS damage']) every time it's ready."""
+    act = mods['actions']
+    plain = act.average_attack_round
+    plain_ws = act.average_ws
+
+    def average_attack_round(player, enemy, starting_tp, ws_threshold, input_metric, *a, **k):
+        low = _below_accuracy(player)                                # (never the best set: see KEEP_ACC)
+        if low:
+            return (1 / low, [0, 0, 1, -1], 0) if input_metric == 'Time to WS' else (low, [0, 0, 1, 1], 0)
+        if input_metric != OVERALL_DPS:
+            return plain(player, enemy, starting_tp, ws_threshold, input_metric, *a, **k)
+        to_ws, out, magic = plain(player, enemy, starting_tp, ws_threshold, 'Time to WS', *a, **k)
+        dps = out[0] / max(out[2], 0.001) + player.abilities.get('GSD WS damage', 0) / max(to_ws, 0.001)
+        return dps, [out[0], out[1], out[2], 1], magic
+
+    def average_ws(player, enemy, *a, **k):
+        low = _below_accuracy(player)
+        if low:
+            return low, [0, 0, 1]
+        return plain_ws(player, enemy, *a, **k)
+    act.average_attack_round = average_attack_round
+    mods['wsdist'].average_attack_round = average_attack_round       # (wsdist.py did "from actions import *")
+    act.average_ws = average_ws
+    mods['wsdist'].average_ws = average_ws
+
+
+# An Acc or Mid set is there for its accuracy: wsdist would trade it for speed. Like the damage taken, the new set must keep at
+# least what the set has (abilities[KEEP_ACC]: its main hand's accuracy).
+KEEP_ACC = 'GSD keep accuracy'
+
+
+def _below_accuracy(player):
+    """0 when the set has the accuracy asked. Otherwise a score worse than any real set's, better the closer it is: wsdist's search
+    starts from a random set and only moves to a higher score, so it has to be able to climb to the accuracy (0.001 - 0.002: its
+    search ignores 0.0001 and under, real scores start around 0.01)."""
+    floor = player.abilities.get(KEEP_ACC)
+    gap = 0 if floor is None else floor - player.stats.get('Accuracy1', 0)
+    return 0.001 * (1 + 1 / (1 + gap)) if gap > 0.01 else 0
 
 
 _GIDX = None
@@ -100,16 +156,23 @@ def pick_variant(entries, augments=None):
     return sorted(allday, key=lambda e: e['Name2'])[-1]
 
 
+def _ws_table():
+    """wsdist's own table in its build_set: {skill: [weapon skills]}, one line per skill (Katana's is on the "ws_dict = {" line: it
+    was missed until 2026-10-30, so no Blade: skill was ever judged)."""
+    import inspect
+    out = {}
+    for line in inspect.getsource(_wsdist()['wsdist'].build_set).splitlines():
+        line = line.strip()
+        if line.startswith('ws_dict = {'):
+            line = line[len('ws_dict = {'):]
+        if line.startswith('"') and '":' in line and '[' in line:
+            out[line.split('"')[1]] = [x.strip().strip('"') for x in line.split('[', 1)[1].split(']')[0].split(',') if x.strip()]
+    return out
+
+
 def ws_list():
     """Weapon skills wsdist can simulate."""
-    m = _wsdist()['wsdist']
-    import inspect
-    src = inspect.getsource(m.build_set)
-    names = []
-    for line in src.splitlines():
-        if line.strip().startswith('"') and '":' in line and '[' in line:
-            names += [x.strip().strip('"') for x in line.split('[', 1)[1].split(']')[0].split(',') if x.strip()]
-    return set(names)
+    return {ws for names in _ws_table().values() for ws in names}
 
 
 def enemies():
@@ -150,13 +213,22 @@ BUFF_PRESETS = {
               'rolls': {'Chaos': 'VII', 'Samurai': 'VII'}, 'roll_bonus': 7, 'job_bonus': True},
 }
 BUFF_LIMITS = {'songs': 5, 'rolls': 4, 'bubbles': 3}        # (as many as wsdist's window has places for)
+# Aftermath: 'auto' = what each Ultimate Weapon is normally kept at (rema.py)
+AM_CHOICES = {'auto': 'Automatic (each weapon)', '0': 'Off', '1': 'Lv.1', '2': 'Lv.2', '3': 'Lv.3'}
+AM_TEXT = {'auto': 'Aftermath for each weapon', '0': 'no Aftermath', '1': 'Aftermath Lv.1', '2': 'Aftermath Lv.2', '3': 'Aftermath Lv.3'}
+# From someone else's Ultimate Weapon, within 10' (BG Wiki): each kind once, Ergon's is Mythic's
+AFTERGLOW = {'Relic': {'Accuracy': 15, 'Ranged Accuracy': 15}, 'Empyrean': {'Crit Rate': 5},
+             'Mythic': {'Attack': 15, 'Ranged Attack': 15}}
 BUBBLE_SLOTS = ('Indi-', 'Geo-', 'Entrust-')
 ROLL_NUMBERS = ('I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI')
 
 
-def buff_spec(choice, custom=None):
-    """What's up for a choice: a copy of the preset, or his own ticks for 'custom'."""
-    return dict(custom or {}) if choice == 'custom' else dict(BUFF_PRESETS.get(choice) or {})
+def buff_spec(choice, custom=None, aftermath=None):
+    """What's up for a choice: a copy of the preset, or his own ticks for 'custom'. aftermath: 'auto' or a level ('0'-'3')."""
+    spec = dict(custom or {}) if choice == 'custom' else dict(BUFF_PRESETS.get(choice) or {})
+    if aftermath is not None:
+        spec['aftermath'] = aftermath
+    return spec
 
 
 def buff_text(choice):
@@ -171,7 +243,7 @@ def buff_options():
     b = mods['buffs']
     return {'songs': list(b.brd), 'rolls': list(b.cor), 'bubbles': list(b.geo) + list(b.geo_debuffs),
             'food': list(mods['gear'].all_food), 'haste': ['Haste', 'Haste II'], 'dia': list(b.whm_debuffs),
-            'boost': [k for k in b.whm if k.startswith(('Boost-', 'Gain-'))]}
+            'boost': [k for k in b.whm if k.startswith(('Boost-', 'Gain-'))], 'afterglow': list(AFTERGLOW)}
 
 
 def buff_stats(spec):
@@ -212,15 +284,98 @@ def buff_stats(spec):
         if stat not in ('Name', 'Name2', 'Type'):
             # (food's Attack comes after Attack % from Chaos Roll etc: wsdist has its own name for it)
             out['food'][{'Attack': 'Food Attack', 'Ranged Attack': 'Food Ranged Attack'}.get(stat, stat)] = v
-    return out, debuffs, int(spec.get('aftermath') or 0)
+    for kind in spec.get('afterglow') or []:
+        for stat, v in AFTERGLOW.get(kind, {}).items():
+            add(out.setdefault('afterglow', {}), stat, v)
+    level = spec.get('set_haste')                            # (from the set's name: set_name.HASTE)
+    if level == 'cap':
+        out['set name'] = {'Gear Haste': 26, 'JA Haste': 26, 'Magic Haste': 1}      # (over each cap: delay capped whatever the gear)
+    elif level:
+        out['set name'] = {'Magic Haste': level / 100 - sum(g.get('Magic Haste', 0) for g in out.values())}
+    am = spec.get('aftermath') or 0
+    return out, debuffs, am if am == 'auto' else int(am)
 
 
-def _abilities(aftermath=0):
-    return {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': aftermath, 'Storm spell': 'None', 'Enhancing Skill': 0,
-            'Verbose Swaps': False}
+def _abilities(aftermath=0, on=()):
+    out = {'Enemy Resist Rank': 0, '99999': False, 'Aftermath': aftermath, 'Storm spell': 'None', 'Enhancing Skill': 0,
+           'Verbose Swaps': False}
+    out.update({name: True for name in on})
+    return out
 
 
-TP_METRICS = {'time': 'Time to WS', 'damage': 'Damage dealt'}
+# What a job keeps up while fighting, under wsdist's own names (create_player.add_buffs). Not what's used now and then: Sneak
+# Attack, Footwork, Saber Dance, Focus. wsdist counts each only for the jobs that have it, Hasso only with a two-handed weapon.
+JOB_ABILITIES = {'WAR': ('Berserk', 'Aggressor'), 'DRK': ('Last Resort',), 'SAM': ('Hasso',), 'MNK': ('Impetus',), 'NIN': ('Innin',),
+                 'RDM': ('Composure',), 'RUN': ('Swordplay',)}
+SUB_ABILITIES = {'WAR': ('Berserk', 'Aggressor'), 'DRK': ('Last Resort',), 'SAM': ('Hasso',), 'RUN': ('Swordplay',)}
+# What a job does keep up but wsdist has no number for (it needs his HP)
+NOT_IN_WSDIST = {'DRK': ('Souleater',)}
+TWO_HANDED = ('Great Sword', 'Great Katana', 'Great Axe', 'Polearm', 'Scythe', 'Staff')
+
+
+def job_abilities(job, sub, spec=None, main=None):
+    """The abilities to count: his own list (spec['abilities']), else what the job and sub job keep up."""
+    if (spec or {}).get('abilities') is not None:
+        names = list(spec['abilities'])
+    else:
+        names = list(JOB_ABILITIES.get((job or '').upper(), ()))
+        names += [a for a in SUB_ABILITIES.get((sub or '').upper(), ()) if a not in names]
+    if main and main.get('Skill Type') not in TWO_HANDED:
+        names = [a for a in names if a != 'Hasso']
+    return names
+
+
+def abilities_note(job, sub, names):
+    """For the notes: 'abilities counted: Last Resort, Hasso; Souleater isn't in wsdist, so it isn't counted'."""
+    out = 'abilities counted: ' + (', '.join(names) if names else 'none')
+    missing = NOT_IN_WSDIST.get((job or '').upper())
+    if missing:
+        out += f"; {', '.join(missing)} isn't in wsdist, so it isn't counted"
+    return out
+
+
+TP_METRICS = {'time': 'Time to WS', 'damage': 'Damage dealt', 'dps': OVERALL_DPS}
+
+
+def _rema_setup(stats, aftermath, start, info=None, job=None, sub=None, spec=None):
+    """The Aftermath for the weapon in this set's main hand and the job's abilities: (wsdist's abilities, the level). What wsdist
+    has different from the game goes in as a buff. info gets it in words."""
+    main = start.get('main')
+    level = rema.level_for(aftermath, main)
+    extra = rema.extras(main, level)
+    if extra:
+        stats['rema'] = extra
+    if info is not None and rema.family((main or {}).get('Name')):
+        why = (spec or {}).get('aftermath_why')
+        info['aftermath'] = rema.note(main, level, aftermath) + (f' ({why})' if why else '')
+    on = job_abilities(job, sub, spec, main)
+    if info is not None:
+        info['abilities'] = abilities_note(job, sub, on)
+        info['level'] = level
+    return _abilities(level, on), level
+
+
+def _tp_metric(metric, start, level, info=None):
+    """How a TP set is judged: an Ultimate Weapon's Aftermath is invisible to time to a weapon skill, so it counts damage too."""
+    if metric == 'time' and rema.judged_by_dps(start.get('main'), level):
+        metric = 'dps'
+    if info is not None:
+        info['metric'] = metric
+    return metric
+
+
+def _ws_worth(act, player, enemy, ws_damage, ws_tp):
+    """The weapon skill's damage for Overall DPS: the one he gave (his weapon skill set), else the weapon's own linked one
+    with this set on."""
+    if ws_damage is not None:
+        return ws_damage
+    ws = rema.linked_ws(player.gearset['main'].get('Name'))
+    if ws and ws in ws_list():
+        try:
+            return act.average_ws(player, enemy, ws, ws_tp, 'melee', 'Damage dealt')[1][0]
+        except Exception:
+            pass
+    return 0
 
 
 def dt_of(player):
@@ -282,12 +437,24 @@ def dt_start(cp, job, sub, ml, start, check, req, abilities, buffs=None):
     return new, (max(req[0], p), max(req[1], m))
 
 
+def _keep_accuracy(cp, job, sub, ml, player0, first, stats, abilities, spec, info=None):
+    """An Acc or Mid set: the search can't go under the accuracy it has (nor under what his damage taken target leaves: that
+    comes first)."""
+    if not (spec or {}).get('keep_accuracy'):
+        return
+    start = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(first), buffs=stats, abilities=abilities)
+    floor = min(player0.stats.get('Accuracy1', 0), start.stats.get('Accuracy1', 0))
+    abilities[KEEP_ACC] = floor
+    if info is not None:
+        info['accuracy'] = floor
+
+
 def _tp_value(out, metric):
     """What to show for a TP set: seconds to the weapon skill, or damage per attack round."""
-    return out[0] if metric == 'time' else out[1][0]
+    return out[0] if metric in ('time', 'dps') else out[1][0]
 
 
-def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None, buffs=None):
+def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None, buffs=None, ws_damage=None):
     """The best TP (engaged) set from the owned gear (wsdist's "attack round" - Melee TP set). metric 'time': the
     seconds of auto-attacks from 0 TP to ws_tp (lower is better); 'damage': damage per attack round. Returns (best
     {slot: entry}, best value, current value). req: (PDT, MDT) the new set must reach (his numbers, dt_requirement);
@@ -310,13 +477,16 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             check[slot].append(start[slot])
         if not check[slot]:
             check[slot] = [start[slot]]
-    abilities = _abilities(aftermath)
+    abilities, level = _rema_setup(stats, aftermath, start, info, job, sub, buffs)
+    metric = _tp_metric(metric, start, level, info)
     m = TP_METRICS.get(metric, 'Time to WS')
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=stats, abilities=abilities)
+            if metric == 'dps':
+                abilities['GSD WS damage'] = _ws_worth(act, player0, enemy, ws_damage, ws_tp)
             now = act.average_attack_round(player0, enemy, 0, ws_tp, m)
             # keep the set's damage taken: a TP.DT set made "faster" by dropping its DT gear would be no use - the new
             # set must have at least the physical / magic DT the set has now (wsdist's PDT / MDT requirement)
@@ -325,10 +495,14 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             first = start
             if req:
                 first, (req_p, req_m) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
+            _keep_accuracy(cp, job, sub, ml, player0, first, stats, abilities, buffs, info)
             best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, 'None', 'None', 'attack round', ws_tp,
                                        check, dict(first), req_p, req_m, m, False, 0)
             after = act.average_attack_round(best, enemy, 0, ws_tp, m)
             dt_best = dt_of(best)
+            if metric == 'dps' and info is not None:
+                info['time'] = (act.average_attack_round(player0, enemy, 0, ws_tp, 'Time to WS')[0],
+                                act.average_attack_round(best, enemy, 0, ws_tp, 'Time to WS')[0])
     finally:
         os.chdir(cwd)
     best_tp_set.kept_dt = (req_p, req_m) if not req else req
@@ -337,7 +511,7 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
     return best.gearset, _tp_value(after, metric), _tp_value(now, metric)
 
 
-def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, info=None, buffs=None):
+def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, info=None, buffs=None, ws_damage=None):
     """A TP set as it is: seconds to the weapon skill (or damage per round); info gets its damage taken."""
     mods = _wsdist()
     cp, act = mods['create_player'], mods['actions']
@@ -345,12 +519,15 @@ def tp_set_value(job, sub, current, ws_tp=1000, enemy_name='Apex Toad', metric='
     enemy = _enemy(enemy_name, debuffs)
     empty = mods['gear'].Empty
     start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
-    abilities = _abilities(aftermath)
+    abilities, level = _rema_setup(stats, aftermath, start, info, job, sub, buffs)
+    metric = _tp_metric(metric, start, level, info)
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             player0 = cp.create_player(job.lower(), sub.lower(), ml, gearset=dict(start), buffs=stats, abilities=abilities)
+            if metric == 'dps':
+                abilities['GSD WS damage'] = _ws_worth(act, player0, enemy, ws_damage, ws_tp)
             now = act.average_attack_round(player0, enemy, 0, ws_tp, TP_METRICS.get(metric, 'Time to WS'))
             if info is not None:
                 info['now'] = dt_of(player0)
@@ -367,7 +544,7 @@ def set_damage(job, sub, ws, current, tp=1500, enemy_name='Apex Toad', ml=20, in
     enemy = _enemy(enemy_name, debuffs)
     empty = mods['gear'].Empty
     start = {slot: current.get(slot) or empty for slot in SLOT_MAP.values()}
-    abilities = _abilities(aftermath)
+    abilities, level = _rema_setup(stats, aftermath, start, info, job, sub, buffs)
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
@@ -404,7 +581,7 @@ def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', m
             check[slot].append(start[slot])
         if not check[slot]:
             check[slot] = [start[slot]]
-    abilities = _abilities(aftermath)
+    abilities, level = _rema_setup(stats, aftermath, start, info, job, sub, buffs)
     cwd = os.getcwd()
     os.chdir(WS_DIR)
     try:
@@ -416,6 +593,7 @@ def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', m
             first = start
             if req:
                 first, (rp, rm) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
+            _keep_accuracy(cp, job, sub, ml, player0, first, stats, abilities, buffs, info)
             best, _ = ws_mod.build_set(job.lower(), sub.lower(), ml, stats, abilities, enemy, ws, 'None', 'weapon skill', tp,
                                        check, dict(first), rp, rm, 'Damage dealt', False, 0)
             after = act.average_ws(best, enemy, ws, tp, 'melee', 'Damage dealt')
@@ -429,14 +607,9 @@ def best_ws_set(job, sub, ws, owned, current, tp=1500, enemy_name='Apex Toad', m
 
 def ws_skill(ws):
     """'Sword' for Savage Blade - from wsdist's own weapon skill table."""
-    import inspect
-    src = inspect.getsource(_wsdist()['wsdist'].build_set)
-    for line in src.splitlines():
-        line = line.strip()
-        if line.startswith('"') and '":' in line and '[' in line:
-            skill = line.split('"')[1]
-            if '"' + ws + '"' in line:
-                return skill
+    for skill, names in _ws_table().items():
+        if ws in names:
+            return skill
     return None
 
 
@@ -499,6 +672,17 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
         if best:
             current['main'] = best
             notes.append(f"no weapon set: tested with your {best['Name']}")
+    # a Prime weapon: the game has one item per stage under one name. wsdist has stages IV and V: the one nearest his
+    main = current.get('main')
+    if main and rema.family(main['Name']) == 'Prime':
+        stage = rema.owned_stage(main['Name'], owned_ids, items)
+        if stage:
+            want = 'V' if stage >= 5 else 'IV'
+            for e in index.get(main['Name'].lower(), []):
+                if e['Name2'].split()[-1] == want:
+                    current['main'] = e
+            if stage < 4:
+                notes.append(f"{main['Name']}: your stage {stage} is judged as stage IV, the lowest wsdist has")
     locked |= {'main', 'sub', 'ranged'}                     # weapons are GearSwap's weapon sets' business
     owned = {}
     for iid in owned_ids:

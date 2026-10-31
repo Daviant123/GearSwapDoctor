@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 1.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 2.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 1, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 2, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -297,6 +297,83 @@ function G.command(w)
     G.box_update()
 end
 
+-- healing: the next lower cure when this one can't go off (his request 2026-10-30, "features for healing")
+local LOWER = {}
+for _, t in ipairs({ { 'Cure VI', 'Cure V', 'Cure IV', 'Cure III', 'Cure II', 'Cure' }, { 'Curaga V', 'Curaga IV', 'Curaga III', 'Curaga II', 'Curaga' },
+                     { 'Curing Waltz V', 'Curing Waltz IV', 'Curing Waltz III', 'Curing Waltz II', 'Curing Waltz' },
+                     { 'Divine Waltz II', 'Divine Waltz' } }) do
+    for i = 1, #t - 1 do LOWER[t[i]] = t[i + 1] end
+end
+local function heal_kind(spell)
+    local n = spell.english or ''
+    if n:find('^Curaga') then return 'curaga' end
+    if n:find('^Cure') then return 'cure' end
+    if n == 'Cursna' then return 'cursna' end
+    if n:find('^Regen') then return 'regen' end
+    if n:find('Waltz') and n ~= 'Healing Waltz' then return 'waltz' end
+    return nil
+end
+function G.cure_down(spell)
+    if not on('cure_down') then return false end
+    local lower = LOWER[spell.english]
+    if not lower then return false end
+    local c = cfg.cure_down
+    local waltz = heal_kind(spell) == 'waltz'
+    local why
+    local rec = spell.recast_id
+    if rec then
+        local list = waltz and windower.ffxi.get_ability_recasts() or windower.ffxi.get_spell_recasts()
+        if type(list) == 'table' and (tonumber(list[rec]) or 0) > 0 then why = 'not ready' end
+    end
+    if waltz then
+        if type(spell.tp_cost) == 'number' and (player.tp or 0) < spell.tp_cost then why = 'not enough TP' end
+    elseif type(spell.mp_cost) == 'number' and (player.mp or 0) < spell.mp_cost then
+        why = 'not enough MP'
+    end
+    if not why then return false end
+    cancel_spell()
+    local t = spell.target or {}
+    local where = (type(t.raw) == 'string' and t.raw:find('^<') and t.raw) or (t.type == 'SELF' and '<me>') or t.name or '<t>'
+    send_command('input ' .. (waltz and '/ja' or '/ma') .. ' "' .. lower .. '" ' .. where)
+    if c.say ~= false then say(spell.english .. ' ' .. why .. ': ' .. lower .. ' instead') end
+    return true
+end
+-- a healing set the file has but no rule for (a plain file): which set goes on for what
+local HEAL_SET = { cure = 'cure', curaga = 'curaga', cursna = 'cursna', regen = 'regen' }
+function G.heal_pre(spell)
+    if not on('healsets') then return end
+    local k = heal_kind(spell)
+    if not k then return end
+    if k == 'waltz' then
+        local s = G.resolve(cfg.healsets.waltz)
+        if s then equip(s) end
+    elseif k == 'cure' or k == 'curaga' then
+        local s = G.resolve(cfg.healsets.precast)
+        if s then equip(s) end
+    end
+end
+function G.heal_mid(spell)
+    if not on('healsets') then return end
+    local k = HEAL_SET[heal_kind(spell) or '']
+    local s = k and G.resolve(cfg.healsets[k])
+    if not s and k == 'curaga' then s = G.resolve(cfg.healsets.cure) end
+    if s then equip(s) end
+end
+-- swapping the main weapon loses your TP: above this much TP, your weapons stay on for cures
+function G.keep_tp(spell)
+    if not on('keep_tp') or not heal_kind(spell) or heal_kind(spell) == 'waltz' then return end
+    if (player.tp or 0) < (cfg.keep_tp.tp or 100) then return end
+    local el = gearswap and gearswap.equip_list
+    if el then el.main, el.sub, el.range = nil, nil, nil end
+end
+function G.solace(spell)
+    if not on('solace') or player.main_job ~= 'WHM' or heal_kind(spell) ~= 'cure' or buff('afflatus solace') then return end
+    local now = os.time and os.time() or 0
+    if now - (G.solace_said or 0) < (cfg.solace.every or 60) then return end
+    G.solace_said = now
+    add_to_chat(167, 'GearSwap Doctor: Afflatus Solace is not on')
+end
+
 -- what happens before your own precast: Echo Drops when silenced, cancel Sneak for Spectral Jig
 function G.pre(spell)
     if on('silence') and spell.action_type == 'Magic' and buff('silence') then
@@ -309,6 +386,8 @@ function G.pre(spell)
     if on('cancel') and cfg.cancel.jig and spell.english == 'Spectral Jig' and buff('sneak') then
         send_command('cancel 71')
     end
+    if G.cure_down(spell) then return true end
+    G.solace(spell)
     return false
 end
 
@@ -428,10 +507,10 @@ function G.install()
     if G.installed then return end
     G.installed = true
     G.th_mode = (on('th') and cfg.th.mode) or 'Off'
-    wrap('precast', G.pre, function(spell) G.moonshade(spell) G.obi(spell)
+    wrap('precast', G.pre, function(spell) G.heal_pre(spell) G.keep_tp(spell) G.moonshade(spell) G.obi(spell)
         if spell.action_type ~= 'Magic' and spell.action_type ~= 'Ranged Attack' then G.th_tag(spell) end
         G.overlay(true) end)
-    wrap('midcast', nil, function(spell) G.mid(spell)
+    wrap('midcast', nil, function(spell) G.mid(spell) G.heal_mid(spell) G.keep_tp(spell)
         if spell.action_type == 'Magic' then G.obi(spell) end
         if spell.action_type == 'Magic' or spell.action_type == 'Ranged Attack' then G.th_tag(spell) end
         G.overlay(true) end)

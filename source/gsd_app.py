@@ -7,6 +7,8 @@ feet), numbers in a fixed-width font.
 Tabs
   Add features GearSwap features to add to a file (Doom gear, Obi, Treasure Hunter, DT key, movement speed ...), with
                their options; suggested ones for the job and the gear owned; written into the file with a click
+  Healing      every healing set of a file (cure, Curaga, fast cast, Cursna, Regen, Waltz, being cured): what it heals now, what
+               is wasted over a cap, and the best set from your gear with the enmity / damage taken it must have
   Overview     each GearSwap file of the character: loads?, sets, problems, wsdist upgrades; Check now; wsdist version
   Problems     what's wrong (broken / misspelled / wrong slot / wrong job / not owned / in storage), filter by kind
   Upgrades     wsdist's better weapon skill sets, your set and the better one side by side in the equipment grid
@@ -38,10 +40,12 @@ import doctor   # noqa: E402
 import features  # noqa: E402
 import fixer    # noqa: E402
 import gs_loader  # noqa: E402
+import healing  # noqa: E402
+import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.6.0'
+VERSION = '2.7.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -57,6 +61,7 @@ SLOT_TEXT = {'main': 'Main', 'sub': 'Sub', 'range': 'Range', 'ammo': 'Ammo', 'he
 JOBS = ['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU',
         'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN']
 OFF, ON = '☐', '☑'
+TP_METRIC_TEXT = {'time': 'time to a weapon skill', 'damage': 'damage per attack round', 'dps': 'damage a second, with weapon skills'}
 WPN_AUTO = '(as in the file)'
 
 # How much each kind matters, and what it means / what to do, in plain words (his request 2026-10-30: "gearswap doctor
@@ -115,13 +120,15 @@ def nowbest(u):
     """'928 -> 1219', or for a TP set '15.99 s -> 13.36 s to a WS'."""
     if u.get('kind') == 'tp' and u.get('unit') == 's':
         return f"{u['now']} s -> {u['best']} s to a WS"
+    if u.get('unit') == 'dps':
+        return f"{u['now']:.0f} -> {u['best']:.0f} damage a second"
     return f"{u['now']} -> {u['best']}"
 
 
 def gain_words(u):
     """What the gain is: 'average damage for Savage Blade' / 'faster to a weapon skill (TP set engaged.Acc)'."""
     if u.get('kind') == 'tp':
-        return ('faster to a weapon skill' if u.get('unit') == 's' else 'more damage per attack round') + f" with {u['ws'][4:]}"
+        return {'s': 'faster to a weapon skill', 'dps': 'more damage a second, weapon skills included'}.get(u.get('unit'), 'more damage per attack round') + f" with {u['ws'][4:]}"
     return f"average damage for {u['ws']}"
 
 
@@ -180,7 +187,10 @@ GUIDE = """How to use GearSwap Doctor
    set from your own gear that has them. "Put it in this set" or "Save it as a new set". Tick "Remember" and the
    check-ups keep to those numbers for that set from then on.
 
-6. "Add features" adds things to a GearSwap file that it may not do yet: Doom gear that goes on by itself, the
+6. "Healing" shows every healing set of a file: what it heals now, what is wasted over a cap, and what's missing. Pick a set, the
+   spell, and what it must also have (enmity, damage taken ...), then "Build the best set from my gear".
+
+7. "Add features" adds things to a GearSwap file that it may not do yet: Doom gear that goes on by itself, the
    Hachirin-no-Obi on the right day / weather, Treasure Hunter tagging, a DT key, movement speed gear when you run,
    a Moonshade swap at high TP, Warp / experience ring commands, and more. ★ marks the ones suggested for that job
    and your gear. Tick them, pick the options (your gear is in the lists), then "Add ticked features to this file".
@@ -193,6 +203,8 @@ Words
   Upgrade    a set wsdist found that does more damage, using only gear this character owns
   wsdist     Kastra's FFXI damage simulator - its numbers are estimates for comparing sets (1500 TP on an Apex Toad,
              typical party buffs, unless changed in Settings), not exact in-game damage
+  Healing    the Healing tab has the game's cure formulas: a cure set is judged by the HP it heals. Cure potency stops at 50 %,
+             potency II at 30 %: gear past that is wasted. Those numbers aren't from wsdist (it has no healing)
   Buffs      what's up while a set is judged (Settings, or the Buffs list in Build a set). Haste changes a TP set the most:
              the more haste you have, the less Dual Wield it needs
 """
@@ -227,12 +239,20 @@ def characters():
     return sorted(names, key=lambda n: (n not in reports, n not in have, n))
 
 
+AM_HELP = ('Your Ultimate Weapon\'s Aftermath while a set is judged. Automatic: Mythic, Ergon, Empyrean and Prime at Lv.3, a Relic\'s '
+           'own effect, Aeonic none (it only adds skillchain damage). Only the main hand counts. With Automatic, an Ultimate Weapon\'s TP '
+           'sets are judged by damage per second with the weapon skills in it, because time to a weapon skill can\'t see most Aftermath.')
 BUFF_HELP = ('What is up while wsdist judges a set. Haste changes a TP set the most: the more haste, the less Dual Wield it needs.\n'
              'None: nothing.\n'
              'Solo: food, Haste II and two Marches from trusts.\n'
              'Typical party: food, Haste II, Dia II on the enemy, Honor and Victory March, Minuet V, Blade Madrigal, '
              'Chaos and Samurai rolls.\n'
              'Custom: tick your own.')
+
+
+def am_key(label):
+    """'Lv.3' -> '3'."""
+    return next((k for k, v in W.AM_CHOICES.items() if v == label), 'auto')
 
 
 def buff_key(label):
@@ -246,7 +266,7 @@ def gs_slot(key):
 
 def load_settings():
     d = {'tp': 1500, 'enemy': 'Apex Toad', 'subs': {}, 'daily': True, 'character': None, 'tp_sets': True, 'ws_tp': 1000,
-         'tp_metric': 'time', 'buffs': 'party', 'buffs_custom': W.buff_spec('party')}
+         'tp_metric': 'time', 'buffs': 'party', 'buffs_custom': W.buff_spec('party'), 'aftermath': 'auto'}
     try:
         d.update(json.load(open(SETTINGS, encoding='utf-8')))
     except (OSError, ValueError):
@@ -382,6 +402,7 @@ class App(tk.Tk):
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
         self._start_tab()
         self._features_tab()
+        self._healing_tab()
         self._overview_tab()
         self._problems_tab()
         self._upgrades_tab()
@@ -613,6 +634,7 @@ class App(tk.Tk):
         s4 = section('4. Add features - Doom gear, Obi, Treasure Hunter, a DT key, movement speed and more')
         self.job_feat = ttk.Label(s4, text='', wraplength=720, justify='left')
         self.job_feat.pack(side='left', fill='x', expand=True)
+        ttk.Button(s4, text='Healing sets...', command=lambda: self.open_healing(self.cur_job)).pack(side='right', padx=(0, 6))
         ttk.Button(s4, text='Choose features...', command=lambda: self.open_features(self.cur_job)).pack(side='right', padx=6)
         self.cur_job = None
         self.job_ticks = set()          # keys of the ticked rows: ('r', path, old) / ('u', path, set)
@@ -715,7 +737,8 @@ class App(tk.Tk):
             self.jt_look.insert('', 'end', text='(nothing)', values=('', '', ''))
         self.job_missing.config(text=f"Not owned: {n_missing} item(s) named in these sets that you don't have - usually "
                                      "nothing to do." if n_missing else "Every item in these sets is one you own.")
-        self._say(self.jt_up_text, 'Click an upgrade to see exactly what it swaps.' if n_up else '')
+        checked = '  '.join(t for t in (doctor.tp_checked_text(f) for f in files) if t)
+        self._say(self.jt_up_text, ('Click an upgrade to see exactly what it swaps.  ' if n_up else '') + checked)
         self.job_feat.config(text=self._job_feature_text(job, files))
 
     def _job_feature_text(self, job, files):
@@ -1388,6 +1411,389 @@ class App(tk.Tk):
         t.pack(fill='both', expand=True)
         ttk.Button(w, text='Close', command=w.destroy).pack(pady=6)
 
+    # ------------------------------------------------------------------ Healing
+    # His request 2026-10-30: "do research, and figure out how to add in a features for healing and making healing sets".
+    # healing.py has the game's formulas (wsdist has none): every healing set of the file with what it heals now, and the
+    # best one from his own gear, for the spell he picks, with what it must also have. His numbers stay per set.
+    def _healing_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.tab_heal = tab
+        self.nb.add(tab, text='★ Healing')
+        top = ttk.Frame(tab)
+        top.pack(fill='x')
+        one = ttk.LabelFrame(top, text='1. The healing set', padding=6)
+        one.pack(side='left', fill='both', expand=True)
+        bar = ttk.Frame(one)
+        bar.pack(fill='x')
+        ttk.Label(bar, text='File').pack(side='left')
+        self.heal_file = ttk.Combobox(bar, state='readonly', width=26)
+        self.heal_file.pack(side='left', padx=4)
+        self.heal_file.bind('<<ComboboxSelected>>', lambda e: self.heal_load())
+        ttk.Label(bar, text='Sub job').pack(side='left', padx=(8, 0))
+        self.heal_sub = ttk.Combobox(bar, values=JOBS, state='readonly', width=5)
+        self.heal_sub.pack(side='left', padx=4)
+        self.heal_sub.bind('<<ComboboxSelected>>', lambda e: self.heal_load(keep_sub=True))
+        fr = ttk.Frame(one)
+        fr.pack(fill='both', expand=True, pady=(4, 0))
+        t = ttk.Treeview(fr, columns=('now', 'note'), show='tree headings', selectmode='browse', height=8)
+        t.heading('#0', text='Set')
+        t.column('#0', width=190)
+        t.heading('now', text='Now')
+        t.column('now', width=115)
+        t.heading('note', text='')
+        t.column('note', width=150)
+        t.tag_configure('miss', foreground='#b36b00')
+        t.tag_configure('over', foreground='#c0392b')
+        sb = ttk.Scrollbar(fr, orient='vertical', command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        t.bind('<<TreeviewSelect>>', lambda e: self.heal_show())
+        self.heal_tree = t
+
+        two = ttk.LabelFrame(top, text='2. What it is judged on', padding=6)
+        two.pack(side='left', fill='both', padx=(8, 0))
+        self.heal_how = ttk.Label(two, text='', wraplength=300, justify='left', foreground='#555')
+        self.heal_how.grid(row=0, column=0, columnspan=4, sticky='w')
+        ttk.Label(two, text='Spell').grid(row=1, column=0, sticky='w', pady=(4, 0))
+        self.heal_spell = ttk.Combobox(two, state='readonly', width=18)
+        self.heal_spell.grid(row=1, column=1, columnspan=3, sticky='w', padx=4, pady=(4, 0))
+        self.heal_spell.bind('<<ComboboxSelected>>', lambda e: self._heal_now())
+        ttk.Label(two, text='Day / weather').grid(row=2, column=0, sticky='w')
+        self.heal_day = ttk.Combobox(two, state='readonly', width=32, values=list(healing.DAYWX))
+        self.heal_day.set(list(healing.DAYWX)[0])
+        self.heal_day.grid(row=2, column=1, columnspan=3, sticky='w', padx=4, pady=2)
+        self.heal_day.bind('<<ComboboxSelected>>', lambda e: self._heal_now())
+        ToolTip(self.heal_day, 'Light day and weather make cures stronger. With a Hachirin-no-Obi the bonus always happens; '
+                               'without it only sometimes. Picks the Obi when it helps.')
+        self.heal_base = {}
+        rows = (('MND', 'MND', 0, 1, 500), ('VIT', 'VIT', 0, 3, 500), ('CHR', 'CHR', 1, 1, 500), ('skill', 'Healing skill', 1, 3, 800),
+                ('jp', 'Cure power (job points)', 2, 1, 200), ('fast', 'Fast Cast from job', 2, 3, 80))
+        for k, label, r, c, top_ in rows:
+            ttk.Label(two, text=label).grid(row=3 + r, column=c - 1, sticky='w', padx=(0 if c == 1 else 8, 0))
+            v = tk.IntVar(value=0)
+            ttk.Spinbox(two, from_=0, to=top_, textvariable=v, width=5, command=self._heal_now).grid(row=3 + r, column=c, sticky='w', padx=3, pady=1)
+            self.heal_base[k] = v
+        ttk.Label(two, text='(without gear - change them if yours differ)', foreground='#777').grid(row=6, column=0, columnspan=4, sticky='w')
+
+        three = ttk.LabelFrame(top, text='3. It must also have', padding=6)
+        three.pack(side='left', fill='both', padx=(8, 0))
+        self.heal_need = {}
+        for i, (k, label, tip) in enumerate((
+                ('enmity', 'Enmity -', 'Less hate from curing. The gear cap is -50.'),
+                ('dt', 'Damage taken (DT) %', 'Counts for both physical and magic. 50 at most.'),
+                ('pdt', 'Physical (PDT) %', 'From weapons and physical TP moves.'),
+                ('mdt', 'Magic (MDT) %', 'From spells and magic TP moves.'),
+                ('conserve', 'Conserve MP', 'A chance of the spell costing less.'),
+                ('sird', 'Interruption -%', 'Spell Interruption Rate Down: for tanks curing while being hit.'))):
+            lb = ttk.Label(three, text=label)
+            lb.grid(row=i, column=0, sticky='w')
+            ToolTip(lb, tip)
+            v = tk.IntVar(value=0)
+            ttk.Spinbox(three, from_=0, to=110, textvariable=v, width=5).grid(row=i, column=1, sticky='w', padx=4, pady=1)
+            self.heal_need[k] = v
+        self.heal_keep = tk.BooleanVar(value=False)
+        ttk.Checkbutton(three, text='Keep my weapons', variable=self.heal_keep).grid(row=6, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        self.heal_solace = tk.BooleanVar(value=False)
+        self.heal_solace_box = ttk.Checkbutton(three, text='Count Solace stoneskin', variable=self.heal_solace)
+        self.heal_solace_box.grid(row=7, column=0, columnspan=2, sticky='w')
+
+        btns = ttk.Frame(tab)
+        btns.pack(fill='x', pady=6)
+        b = ttk.Button(btns, text='4. Build the best set from my gear', style='Big.TButton', command=self.heal_build)
+        b.pack(side='left')
+        ToolTip(b, 'Tries your gear (inventory and wardrobes) until nothing helps. Same gear, same answer. Nothing changes in the '
+                   'file until you put it in.')
+        self.heal_put_btn = ttk.Button(btns, text='Put it in this set', command=self.heal_put, state='disabled')
+        self.heal_put_btn.pack(side='left', padx=8)
+        self.heal_new_btn = ttk.Button(btns, text='Save it as a new set...', command=self.heal_save_new, state='disabled')
+        self.heal_new_btn.pack(side='left')
+        self.heal_status = ttk.Label(btns, text='', wraplength=560, justify='left')
+        self.heal_status.pack(side='left', padx=8)
+        res = ttk.LabelFrame(tab, text='Results', padding=6)
+        res.pack(fill='both', expand=True)
+        self.heal_head = ttk.Label(res, text='', font=('Courier New', 11))
+        self.heal_head.pack(anchor='w')
+        cols = ttk.Frame(res)
+        cols.pack(fill='both', expand=True)
+        left, right = ttk.Frame(cols), ttk.Frame(cols)
+        left.pack(side='left', fill='both', expand=True, padx=(0, 4))
+        right.pack(side='left', fill='both', expand=True)
+        self.heal_grid_now = GearGrid(left, 'The set now', lambda: self.items)
+        self.heal_grid_now.pack(fill='x')
+        self.heal_now_text = ttk.Label(left, text='', justify='left', wraplength=560)
+        self.heal_now_text.pack(anchor='w', pady=(4, 0))
+        self.heal_grid_best = GearGrid(right, 'Best from your gear', lambda: self.items)
+        self.heal_grid_best.pack(fill='x')
+        self.heal_best_text = ttk.Label(right, text='', justify='left', wraplength=560)
+        self.heal_best_text.pack(anchor='w', pady=(4, 0))
+        self.heal_rows, self.heal_paths, self.heal_cur, self.heal_result = {}, {}, None, None
+        self._heal_data = None
+        self._heal_dirty = True
+        self.nb.bind('<<NotebookTabChanged>>', lambda e: self.heal_load() if self._heal_dirty and
+                     str(self.nb.select()) == str(self.tab_heal) else None, add='+')
+
+    def heal_fill_files(self):
+        self.heal_paths = {os.path.basename(f): f for f in doctor.files_for(self.who.get())}
+        names = list(self.heal_paths)
+        self.heal_file.configure(values=names)
+        if self.heal_file.get() not in names:
+            first = [n for n in names if checks.job_of(n) in healing.WANTED]
+            self.heal_file.set((first or names or [''])[0])
+        self._heal_dirty = True
+        if str(self.nb.select()) == str(self.tab_heal):
+            self.heal_load()
+
+    def open_healing(self, job):
+        files = self._files_of(job)
+        if files and os.path.basename(files[0]['path']) in self.heal_paths:
+            self.heal_file.set(os.path.basename(files[0]['path']))
+            self._heal_dirty = True
+        self.nb.select(self.tab_heal)
+        if self._heal_dirty:
+            self.heal_load()
+
+    def _heal_values(self, vars_):
+        out = {}
+        for k, v in vars_.items():
+            try:
+                out[k] = int(v.get())
+            except (tk.TclError, ValueError):
+                out[k] = 0
+        return out
+
+    def _heal_base(self):
+        """His numbers without gear, plus the day / weather of this set."""
+        b = dict(self._heal_defaults)
+        b.update(self._heal_values(self.heal_base))
+        b['daywx'] = healing.DAYWX.get(self.heal_day.get(), 0)
+        return b
+
+    def _heal_cands(self, job):
+        """Every item this job can wear that he owns (once per augmented copy his files name), and how many of each."""
+        if self._heal_data is None:
+            self._heal_data = healing.ItemData()
+        owned = self.feat_owned(job, force=True)
+        loaded = []
+        for p in self.heal_paths.values():
+            try:
+                loaded.append(self.loaded_file(p))
+            except Exception:
+                pass
+        counts = {}
+        try:
+            snap = json.load(open(os.path.join(doctor.DATA, f'bags_{self.who.get()}.json'), encoding='utf-8'))
+            for bag, content in snap.get('bags', {}).items():
+                if bag in checks.EQUIP_BAGS:
+                    for n, c in content.items():
+                        counts[n] = counts.get(n, 0) + c
+        except (OSError, ValueError):
+            pass
+        return healing.candidates(owned, self._heal_data, healing.known_augments(loaded)), counts
+
+    def heal_load(self, keep_sub=False):
+        self._heal_dirty = False
+        t = self.heal_tree
+        t.delete(*t.get_children())
+        self.heal_rows = {}
+        self.heal_result = None
+        name = self.heal_file.get()
+        path = self.heal_paths.get(name)
+        if not path:
+            self.heal_status.config(text='No GearSwap files for this character.')
+            return
+        job = checks.job_of(name) or 'WHM'
+        if not keep_sub:
+            self.heal_sub.set(self.cfg['subs'].get(job, 'WHM' if job in ('RDM', 'PLD', 'RUN') else 'SCH' if job == 'WHM' else 'WAR'))
+        sub = self.heal_sub.get()
+        self._heal_defaults = healing.defaults(job, sub)
+        mine = (self.cfg.get('heal_stats') or {}).get(job) or {}
+        for k, v in self.heal_base.items():
+            v.set(int(mine.get(k, self._heal_defaults.get(k, 0))))
+        self._heal_job, self._heal_path = job, path
+        if self.items is None:
+            self.items = checks.Items()
+        if self._heal_data is None:
+            self._heal_data = healing.ItemData()
+        ld = self.loaded_file(path)
+        base = self._heal_base()
+        first = None
+        for s in healing.find_sets(ld):
+            spell = healing.spell_for_set(s['kind'], s['path'], job, sub)
+            cur = healing.set_to_gear(s['gear'], self.items, self._heal_data)
+            v, tot = healing.evaluate(s['kind'], cur, base, spell)
+            note = healing.short_note(s['kind'], tot, base)
+            row = t.insert('', 'end', text=s['path'][len('sets.'):], values=(healing.fmt_value(s['kind'], v), note),
+                           tags=('over',) if 'wasted' in note else ())
+            self.heal_rows[row] = {'path': s['path'], 'kind': s['kind'], 'gear': s['gear'], 'new': False}
+            first = first or row
+        for k in healing.missing_sets(ld, job, sub):
+            row = t.insert('', 'end', text='＋ ' + healing.NEW_PATH[k][len('sets.'):], values=('none yet', healing.KINDS[k]['title']), tags=('miss',))
+            self.heal_rows[row] = {'path': healing.NEW_PATH[k], 'kind': k, 'gear': {}, 'new': True}
+            first = first or row
+        self.heal_status.config(text='' if first else f'No healing sets in {name}, and {job} / {sub} doesn\'t usually need any.')
+        if first:
+            t.selection_set(first)
+            t.see(first)
+            self.heal_show()
+        else:
+            self.heal_head.config(text='')
+            self.heal_grid_now.show({})
+            self.heal_grid_best.show({})
+
+    def heal_show(self):
+        sel = self.heal_tree.selection()
+        rec = self.heal_rows.get(sel[0]) if sel else None
+        if not rec:
+            return
+        self.heal_cur = rec
+        kind = rec['kind']
+        K = healing.KINDS[kind]
+        job, sub = self._heal_job, self.heal_sub.get()
+        self.heal_how.config(text=K['title'] + ': ' + K['how'])
+        h = healing.hints(rec['path'], job)
+        saved = ((self.cfg.get('heal_targets') or {}).get(os.path.basename(self._heal_path)) or {}).get(rec['path']) or {}
+        spell = saved.get('spell') or healing.spell_for_set(kind, rec['path'], job, sub)
+        self.heal_spell.configure(values=K['spells'], state='readonly' if K['spells'] else 'disabled')
+        self.heal_spell.set(spell or '')
+        days = list(healing.DAYWX)
+        self.heal_day.set(saved.get('day') or next((d for d in days if healing.DAYWX[d] == h['daywx']), days[0]))
+        need = saved.get('need', h['need'])
+        for k, v in self.heal_need.items():
+            v.set(int(need.get(k, 0)))
+        self.heal_keep.set(saved.get('keep', h['keep_weapons']))
+        self.heal_solace.set(saved.get('solace', h['solace'] and kind == 'cure'))
+        self.heal_solace_box.config(state='normal' if kind == 'cure' else 'disabled')
+        self._heal_now()
+
+    def _heal_now(self):
+        """The set as it is, with the numbers as they are now."""
+        rec = self.heal_cur
+        if not rec:
+            return
+        self.heal_result = None
+        self.heal_put_btn.config(state='disabled')
+        self.heal_new_btn.config(state='disabled')
+        base = self._heal_base()
+        spell = self.heal_spell.get() or None
+        cur = healing.set_to_gear(rec['gear'], self.items, self._heal_data)
+        v, tot = healing.evaluate(rec['kind'], cur, base, spell)
+        self.heal_head.config(text=('(this set is not in the file yet)' if rec['new'] else
+                                    f"{spell or healing.KINDS[rec['kind']]['title']}: {healing.fmt_value(rec['kind'], v)}"))
+        self.heal_grid_now.show({s: c['name'] for s, c in cur.items()})
+        self.heal_grid_best.show({})
+        self.heal_now_text.config(text='' if rec['new'] else '\n'.join(healing.describe(rec['kind'], tot, base, v, spell)))
+        self.heal_best_text.config(text='')
+
+    def heal_build(self, wait=False):
+        rec = self.heal_cur
+        if not rec:
+            messagebox.showinfo('GearSwap Doctor', 'Pick a set on the left first.')
+            return
+        job, sub = self._heal_job, self.heal_sub.get()
+        base = self._heal_base()
+        spell = self.heal_spell.get() or None
+        need = {k: v for k, v in self._heal_values(self.heal_need).items() if v}
+        keep, solace, kind = bool(self.heal_keep.get()), bool(self.heal_solace.get()), rec['kind']
+        cur = healing.set_to_gear(rec['gear'], self.items, self._heal_data)
+        cands, counts = self._heal_cands(job)
+        if not cands:
+            self.heal_status.config(text='No saved bags for this character yet: Check now makes the list (from Steward or findAll).')
+            return
+        # remembered per set
+        allt = self.cfg.setdefault('heal_targets', {})
+        allt.setdefault(os.path.basename(self._heal_path), {})[rec['path']] = {'spell': spell, 'day': self.heal_day.get(), 'need': need,
+                                                                               'keep': keep, 'solace': solace}
+        stats = self.cfg.setdefault('heal_stats', {})
+        stats[job] = self._heal_values(self.heal_base)
+        save_settings({'heal_targets': allt, 'heal_stats': stats})
+        self.heal_status.config(text='Trying your gear ...')
+        self.progress.config(mode='indeterminate'); self.progress.start(12)
+
+        def work():
+            try:
+                best, val, now = healing.build(kind, cands, cur, base, job, sub, spell=spell, need=need, keep_weapons=keep, solace=solace, counts=counts)
+                done = lambda: self._heal_done(rec, cur, best, val, now, base, spell, need, keep)  # noqa: E731
+            except Exception as e:
+                done = lambda e=e: self._heal_failed(e)  # noqa: E731
+            self.after(0, done) if not wait else done()
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _heal_failed(self, e):
+        self.progress.stop(); self.progress.config(mode='determinate', value=0)
+        self.heal_status.config(text=f'Could not build it: {e}')
+
+    def _heal_done(self, rec, cur, best, val, now, base, spell, need, keep):
+        self.progress.stop(); self.progress.config(mode='determinate', value=0)
+        kind = rec['kind']
+        v0, t0 = healing.evaluate(kind, cur, base, spell)
+        v1, t1 = healing.evaluate(kind, best, base, spell)
+        ch = healing.changes(cur, best, keep)
+        names = {s: c['name'] for s, c in best.items()}
+        self.heal_grid_now.show({s: c['name'] for s, c in cur.items()}, {s: '#fbe3c4' for s in ch})
+        self.heal_grid_best.show(names, {s: '#c8efc0' for s in ch if s in names})
+        self.heal_now_text.config(text='' if rec['new'] else '\n'.join(healing.describe(kind, t0, base, v0, spell)))
+        self.heal_best_text.config(text='\n'.join(healing.describe(kind, t1, base, v1, spell)))
+        label = spell or healing.KINDS[kind]['title']
+        self.heal_head.config(text=f'{label}:  ' + (f'best {healing.fmt_value(kind, v1)}' if rec['new'] else
+                                                    f'your set {healing.fmt_value(kind, v0)}   ->   best {healing.fmt_value(kind, v1)}'))
+        short = healing.shortfall(t1, need)
+        words = []
+        if short:
+            words.append(f"⚠ Your gear can't reach everything in part 3: this is the closest ({short} short in all).")
+        elif need:
+            words.append('✔ It has everything in part 3.')
+        if not ch:
+            words.append('Your set is already the best your gear can do for this.')
+        if rec['new']:
+            sty = features.style_of(open(self._heal_path, encoding='utf-8', errors='replace').read())
+            if sty == 'plain':
+                words.append('Your file has its own rules: also tick "Healing sets go on for healing spells" in Add features.')
+        self.heal_status.config(text=' '.join(words))
+        self.heal_result = {'rec': rec, 'changes': ch, 'gear': {s: healing.gs_name(c) for s, c in best.items()
+                                                                if not (keep and s in ('main', 'sub'))}}
+        self.heal_put_btn.config(text='Add this set to the file' if rec['new'] else 'Put it in this set',
+                                 state='normal' if (ch or rec['new']) and self.heal_result['gear'] else 'disabled')
+        self.heal_new_btn.config(state='normal' if self.heal_result['gear'] and not rec['new'] else 'disabled')
+
+    def _heal_after_apply(self):
+        self.loaded.pop(self._heal_path, None)
+        self._heal_dirty = True
+        self.heal_load(keep_sub=True)
+
+    def heal_put(self):
+        r = self.heal_result
+        if not r:
+            return
+        rec = r['rec']
+        if rec['new']:
+            anchors = [s['path'] for s in self.loaded_file(self._heal_path).sets]
+            edit = ('new', rec['path'], dict(r['gear']), anchors)
+        else:
+            edit = ('slots', rec['path'], dict(r['changes']))
+        if self._apply({self._heal_path: [edit]}) is not False:
+            self._heal_after_apply()
+
+    def heal_save_new(self):
+        r = self.heal_result
+        if not r:
+            return
+        rec = r['rec']
+        from tkinter import simpledialog
+        name = simpledialog.askstring('GearSwap Doctor - save as a new set',
+                                      f"A name for the new set. It goes right after {rec['path']} in the file:\n\n"
+                                      f"    {rec['path']}.<name>\n\nFor example Solace, DT, SIRD. (GearSwap only uses it when your "
+                                      "file's rules ask for it.)", initialvalue='DT', parent=self)
+        if not name:
+            return
+        name = name.strip()
+        new_path = rec['path'] + ('.' + name if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name) else '["' + name.replace('"', '') + '"]')
+        if self._apply({self._heal_path: [('add', rec['path'], new_path, dict(r['gear']))]}) is not False:
+            self._heal_after_apply()
+
     # ------------------------------------------------------------------ Overview
     def _overview_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
@@ -1702,6 +2108,12 @@ class App(tk.Tk):
         self.sim_buffs.grid(row=4, column=1, sticky='w', padx=4, pady=2)
         ToolTip(lb, BUFF_HELP)
         ToolTip(self.sim_buffs, BUFF_HELP)
+        lb = ttk.Label(inp, text='Aftermath')
+        lb.grid(row=4, column=2, sticky='w', padx=(16, 0))
+        self.sim_am = self._am_box(inp)
+        self.sim_am.grid(row=4, column=3, sticky='w', padx=4)
+        ToolTip(lb, AM_HELP)
+        ToolTip(self.sim_am, AM_HELP)
 
         dtf = ttk.LabelFrame(top, text='2. Damage taken it must have (% less damage)', padding=8)
         dtf.pack(side='left', fill='both', padx=(8, 0))
@@ -1951,32 +2363,35 @@ class App(tk.Tk):
                 weapons = [(s['path'], s['gear']) for s in ld.sets if s['path'].startswith('sets.weapons')]
                 req = W.dt_requirement(target)
                 info = {'buffs': W.buff_text(buff_key)}
+                wsd = None
+                names = set_name.FileInfo(ld, index)
                 if doctor.is_tp_set(set_path):
                     tw, main_ws = doctor.tp_weapons(ld)
-                    owned, cur, notes = doctor.plan_tp(job, sub, gear, tw, main_ws, owned_ids, items, index)
-                    skill, what = None, 'tp'
+                    plan = doctor.plan_set(names, set_path, gear, job, sub, owned_ids, items, index, buffs, None, tw, main_ws)
+                    what = 'tp'
                 else:
-                    known = W.ws_list()
-                    ws = doctor.ws_of(set_path, known)
-                    if not ws and '"' in set_path and set_path.split('"')[1] in known:
-                        ws = set_path.split('"')[1]
-                    if not ws:
+                    what = doctor.ws_of(set_path, W.ws_list()) or doctor.ws_in(set_path, W.ws_list())
+                    if not what:
                         raise ValueError(f"{set_path} isn't a weapon skill wsdist knows")
-                    owned, cur, notes, skill = W.plan_ws(job, sub, ws, gear, weapons, owned_ids, items, index)
-                    what = ws
+                    plan = doctor.plan_set(names, set_path, gear, job, sub, owned_ids, items, index, buffs, what, weapons)
+                if plan['error']:
+                    raise ValueError(plan['error'])
+                owned, cur, notes, skill, spec = plan['owned'], plan['cur'], plan['notes'], plan['skill'], plan['spec']
+                if what == 'tp':
+                    wsd = doctor.tp_ws_damage(ld, job, sub, cur, owned_ids, items, index, tp, enemy, spec)
                 if 'main' not in cur:
                     raise ValueError(f'no {skill or "matching"} weapon to test it with')
                 now_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in cur.items() if e and e.get('Name') != 'Empty'}
                 best_gear = None
                 if what == 'tp':
                     if find_best:
-                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=buffs)
+                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=spec, ws_damage=wsd)
                     else:
-                        now, dmg = W.tp_set_value(job, sub, cur, ws_tp=tp, enemy_name=enemy, metric=metric, info=info, buffs=buffs), None
+                        now, dmg = W.tp_set_value(job, sub, cur, ws_tp=tp, enemy_name=enemy, metric=metric, info=info, buffs=spec, ws_damage=wsd), None
                 elif find_best:
-                    best, dmg, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=buffs)
+                    best, dmg, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=spec)
                 else:
-                    now, dmg = W.set_damage(job, sub, what, cur, tp=tp, enemy_name=enemy, info=info, buffs=buffs), None
+                    now, dmg = W.set_damage(job, sub, what, cur, tp=tp, enemy_name=enemy, info=info, buffs=spec), None
                 if dmg is not None:
                     best_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in best.items() if e and e['Name'] != 'Empty'}
                 info['asked'] = req
@@ -1992,8 +2407,10 @@ class App(tk.Tk):
         label = (f'TP set, weapon skill at {tp} TP' if tpset else f'{what} at {tp} TP') + f' on {enemy}'
         if info.get('buffs'):
             label += ', ' + info['buffs']
+        metric = info.get('metric', metric)
+        notes = list(notes) + doctor._am_notes(info)
         self.sim_status.config(text=label + (('   (' + '; '.join(notes) + ')') if notes else ''))
-        unit = (' s to a WS' if metric == 'time' else ' per round') if tpset else ''
+        unit = {'time': ' s to a WS', 'dps': ' damage a second'}.get(metric, ' per round') if tpset else ''
 
         def fmt(v):
             return f'{v:>7.2f}{unit}' if tpset else f'{v:>8.0f}'
@@ -2176,6 +2593,12 @@ class App(tk.Tk):
         self.cfg_buffs = self._buffs_box(ws)
         self.cfg_buffs.grid(row=2, column=1, sticky='w', padx=6, pady=2)
         ttk.Button(ws, text='Custom buffs...', command=self.open_custom_buffs).grid(row=2, column=2, padx=6)
+        lb = ttk.Label(ws, text='Aftermath')
+        lb.grid(row=3, column=0, sticky='w')
+        self.cfg_am = self._am_box(ws)
+        self.cfg_am.grid(row=3, column=1, sticky='w', padx=6, pady=2)
+        ToolTip(lb, AM_HELP)
+        ToolTip(self.cfg_am, AM_HELP)
         ToolTip(lb, BUFF_HELP)
         ToolTip(self.cfg_buffs, BUFF_HELP)
         tpf = ttk.LabelFrame(tab, text='TP sets (engaged)', padding=8)
@@ -2183,8 +2606,8 @@ class App(tk.Tk):
         self.cfg_tp_sets = tk.BooleanVar(value=self.cfg.get('tp_sets', True))
         ttk.Checkbutton(tpf, text='Also check TP sets (sets.engaged / sets.TP) for faster ones from your gear', variable=self.cfg_tp_sets).grid(row=0, column=0, columnspan=4, sticky='w')
         ttk.Label(tpf, text='Judge them by').grid(row=1, column=0, sticky='w', pady=(4, 0))
-        self.cfg_tp_metric = ttk.Combobox(tpf, values=['time to a weapon skill', 'damage per attack round'], state='readonly', width=24)
-        self.cfg_tp_metric.set('damage per attack round' if self.cfg.get('tp_metric') == 'damage' else 'time to a weapon skill')
+        self.cfg_tp_metric = ttk.Combobox(tpf, values=list(TP_METRIC_TEXT.values()), state='readonly', width=30)
+        self.cfg_tp_metric.set(TP_METRIC_TEXT.get(self.cfg.get('tp_metric'), TP_METRIC_TEXT['time']))
         self.cfg_tp_metric.grid(row=1, column=1, sticky='w', padx=6, pady=(4, 0))
         ttk.Label(tpf, text='Weapon skill at').grid(row=1, column=2, sticky='w', padx=(12, 0), pady=(4, 0))
         self.cfg_ws_tp = tk.IntVar(value=self.cfg.get('ws_tp', 1000))
@@ -2258,10 +2681,15 @@ class App(tk.Tk):
         box.bind('<<ComboboxSelected>>', lambda e: box.get() == W.BUFF_CHOICES['custom'] and self.open_custom_buffs())
         return box
 
+    def _am_box(self, parent):
+        box = ttk.Combobox(parent, values=list(W.AM_CHOICES.values()), width=25, state='readonly')
+        box.set(W.AM_CHOICES.get(str(self.cfg.get('aftermath', 'auto')), W.AM_CHOICES['auto']))
+        return box
+
     def sim_buff_choice(self):
-        """The Build a set dropdown: (its choice, what's up)."""
+        """The Build a set dropdowns: (the Buffs choice, what's up)."""
         key = buff_key(self.sim_buffs.get())
-        return key, W.buff_spec(key, self.cfg.get('buffs_custom'))
+        return key, W.buff_spec(key, self.cfg.get('buffs_custom'), am_key(self.sim_am.get()))
 
     def open_custom_buffs(self):
         """The Custom buffs: wsdist's own lists, as tick boxes. Saved in the settings, used by Settings and Build a set."""
@@ -2273,7 +2701,7 @@ class App(tk.Tk):
         w = tk.Toplevel(self)
         w.title('Custom buffs')
         w.transient(self)
-        self.buff_vars = v = {'songs': {}, 'rolls': {}, 'bubbles': {}, 'haste': {}, 'dia': {}}
+        self.buff_vars = v = {'songs': {}, 'rolls': {}, 'bubbles': {}, 'haste': {}, 'dia': {}, 'afterglow': {}}
         self.buff_win = w
         note = ttk.Label(w, text='Tick what is up in your party. Only what you tick counts.', foreground='#666')
         note.pack(anchor='w', padx=8, pady=(8, 0))
@@ -2312,15 +2740,17 @@ class App(tk.Tk):
         self.buff_boost = ttk.Combobox(whm, values=['None'] + opts['boost'], width=16, state='readonly')
         self.buff_boost.set(spec.get('boost') or 'None')
         self.buff_boost.pack(anchor='w')
-        oth = ttk.LabelFrame(left, text='Food and Aftermath', padding=6)
+        oth = ttk.LabelFrame(left, text='Food and Afterglow', padding=6)
         oth.pack(fill='x', pady=(8, 0))
         self.buff_food = ttk.Combobox(oth, values=['None'] + opts['food'], width=20, state='readonly')
         self.buff_food.set(spec.get('food') or 'None')
         self.buff_food.pack(anchor='w')
-        ttk.Label(oth, text='Aftermath level (Relic, Mythic, Empyrean,\nPrime weapons only)').pack(anchor='w', pady=(6, 0))
-        self.buff_am = ttk.Combobox(oth, values=[0, 1, 2, 3], width=5, state='readonly')
-        self.buff_am.set(spec.get('aftermath', 0))
-        self.buff_am.pack(anchor='w')
+        ttk.Label(oth, text='Afterglow from someone else\'s\nUltimate Weapon, within 10\'').pack(anchor='w', pady=(6, 0))
+        glow = {'Relic': 'Relic: Accuracy +15', 'Empyrean': 'Empyrean: Crit. rate +5%', 'Mythic': 'Mythic / Ergon: Attack +15'}
+        for name in opts['afterglow']:
+            b = tk.BooleanVar(value=name in (spec.get('afterglow') or []))
+            v['afterglow'][name] = b
+            ttk.Checkbutton(oth, text=glow.get(name, name), variable=b).pack(anchor='w')
 
         brd = ttk.LabelFrame(cols, text='Songs', padding=6)
         brd.pack(side='left', fill='y', padx=(8, 0), anchor='n')
@@ -2381,7 +2811,7 @@ class App(tk.Tk):
                 'roll_bonus': int(self.buff_roll_bonus.get()), 'job_bonus': bool(self.buff_job_bonus.get()),
                 'bubbles': [n for n, b in v['bubbles'].items() if b.get()], 'bubble_bonus': int(self.buff_bubble_bonus.get()),
                 'bubble_potency': int(self.buff_potency.get()), 'haste': one('haste'), 'dia': one('dia'),
-                'boost': pick(self.buff_boost), 'food': pick(self.buff_food), 'aftermath': int(self.buff_am.get())}
+                'boost': pick(self.buff_boost), 'food': pick(self.buff_food), 'afterglow': [n for n, b in v['afterglow'].items() if b.get()]}
         return spec
 
     def save_custom_buffs(self):
@@ -2395,10 +2825,12 @@ class App(tk.Tk):
         self.cfg['subs'] = {j: cb.get() for j, cb in self.cfg_subs.items()}
         self.cfg['daily'] = bool(self.cfg_daily.get())
         self.cfg['tp_sets'] = bool(self.cfg_tp_sets.get())
-        self.cfg['tp_metric'] = 'damage' if self.cfg_tp_metric.get().startswith('damage') else 'time'
+        self.cfg['tp_metric'] = next((k for k, v in TP_METRIC_TEXT.items() if v == self.cfg_tp_metric.get()), 'time')
         self.cfg['ws_tp'] = int(self.cfg_ws_tp.get())
         self.cfg['buffs'] = buff_key(self.cfg_buffs.get())
         self.sim_buffs.set(self.cfg_buffs.get())
+        self.cfg['aftermath'] = am_key(self.cfg_am.get())
+        self.sim_am.set(self.cfg_am.get())
         save_settings(self.cfg)
         messagebox.showinfo('GearSwap Doctor', 'Saved. The next Check now uses them.')
 
@@ -2425,6 +2857,7 @@ class App(tk.Tk):
             self.sim_file_changed()
         self.fill_jobs()
         self.feat_fill_files()
+        self.heal_fill_files()
         self.fill_overview()
         self.fill_problems()
         self.fill_upgrades()
@@ -2435,7 +2868,7 @@ class App(tk.Tk):
             self.status.config(text=f'No check-up yet for {self.who.get()} - click Check now')
         else:
             self.status.config(text=f"Checked {ago(r['time'])}  -  bags saved by Steward {ago(r.get('bags_time'))}"
-                                    + (f"  -  wsdist: {r.get('tp', 1500)} TP on {r.get('enemy', 'Apex Toad')}, {r.get('buffs_text', 'no buffs')}"))
+                                    + (f"  -  wsdist: {r.get('tp', 1500)} TP on {r.get('enemy', 'Apex Toad')}, {r.get('buffs_text', 'no buffs')}" + (f", {r['aftermath_text']}" if r.get('aftermath_text') else '')))
 
     def fill_overview(self):
         t = self.files_tree
@@ -2516,7 +2949,8 @@ class App(tk.Tk):
             if not ups:
                 continue
             good = [u for u in ups if 'error' not in u]
-            fid = t.insert('', 'end', iid=self._iid('u'), text=f"{f['file']}  ({len(good)})", open=bool(good))
+            checked = doctor.tp_checked_text(f)
+            fid = t.insert('', 'end', iid=self._iid('u'), text=f"{f['file']}  ({len(good)})" + (f'   -   {checked}' if checked else ''), open=bool(good))
             ups = sorted(ups, key=lambda u: -(u.get('gain') or -1))           # (the biggest gains first)
             for u in ups:
                 if 'error' in u:
@@ -2569,7 +3003,7 @@ class App(tk.Tk):
             try:
                 rep = doctor.checkup(who, wsdist=updater.installed(), sub=cfg.get('subs') or 'WAR', tp=cfg.get('tp', 1500), enemy=cfg.get('enemy', 'Apex Toad'),
                                      tp_sets=cfg.get('tp_sets', True), ws_tp=cfg.get('ws_tp', 1000), tp_metric=cfg.get('tp_metric', 'time'),
-                                     targets=cfg.get('dt_targets') or {}, buffs=cfg.get('buffs', 'party'), buffs_custom=cfg.get('buffs_custom'),
+                                     targets=cfg.get('dt_targets') or {}, buffs=cfg.get('buffs', 'party'), buffs_custom=cfg.get('buffs_custom'), aftermath=str(cfg.get('aftermath', 'auto')),
                                      progress=lambda m: self.after(0, lambda: self.status.config(text=m + ' ...')))
                 self.after(0, lambda: self._done(rep, who))
             except Exception as e:
@@ -2620,7 +3054,8 @@ class App(tk.Tk):
             lines.append(os.path.basename(path) + ':')
             for e in edits:
                 lines.append(f'   {e[1]} -> {e[2]}' if e[0] == 'rename' else f'   new set {e[2]}' if e[0] == 'add'
-                             else f'   {e[1]}: ' + ', '.join(f'{k} {v}' for k, v in e[2].items()))
+                             else f'   new set {e[1]}' if e[0] == 'new'
+                             else f'   {e[1]}: ' + ', '.join(f'{k} {fixer.item_text(v)}' for k, v in e[2].items()))
         if not self.confirm_changes(by_file):
             return False
         out = []
@@ -2641,7 +3076,7 @@ class App(tk.Tk):
         w.title('Change these GearSwap files?')
         w.geometry('900x480')
         w.transient(self)
-        n = sum(len(e[2]) if e[0] == 'slots' else len(e[3]) if e[0] == 'add' else 1 for edits in by_file.values() for e in edits)
+        n = sum(len(e[2]) if e[0] in ('slots', 'new') else len(e[3]) if e[0] == 'add' else 1 for edits in by_file.values() for e in edits)
         ttk.Label(w, text=f'{n} change(s) in {len(by_file)} file(s):', font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
         frame = ttk.Frame(w)
         frame.pack(fill='both', expand=True, padx=10)
@@ -2659,11 +3094,14 @@ class App(tk.Tk):
                     t.insert('', 'end', text=os.path.basename(path), values=('misspelled name (every set)', '', e[1], e[2]))
                 elif e[0] == 'add':
                     for slot, new in e[3].items():
-                        t.insert('', 'end', text=os.path.basename(path), values=(e[2] + '  (new set)', slot, '', new))
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[2] + '  (new set)', slot, '', fixer.item_text(new)))
+                elif e[0] == 'new':
+                    for slot, new in e[2].items():
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[1] + '  (new set)', slot, '', fixer.item_text(new)))
                 else:
                     cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
                     for slot, new in e[2].items():
-                        t.insert('', 'end', text=os.path.basename(path), values=(e[1], slot, cur.get(slot, ''), new))
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[1], slot, cur.get(slot, ''), fixer.item_text(new)))
         ttk.Label(w, text='Each file is backed up first ("Undo last change" puts it back). A change that would stop a file from '
                           'loading is refused. In game: //gs reload afterwards.', foreground='#555', wraplength=860).pack(anchor='w', padx=10, pady=6)
         res = {'ok': False}
@@ -2767,6 +3205,22 @@ def selftest(out_path):
             if fs:
                 out['features'] = {'count': len(features.FEATURES), 'file_sets': len(gs_loader.load(fs[0]).sets),
                                    'errors': features.simulate(fs[0], conf)[:3]}
+                break
+        # healing: every healing set of the first file that has any, built from the item list (no bags needed for the test)
+        data = healing.ItemData()
+        for who in chars:
+            for f in doctor.files_for(who):
+                ld = gs_loader.load(f)
+                found = healing.find_sets(ld)
+                if found:
+                    job = checks.job_of(f) or 'WHM'
+                    base = healing.defaults(job, 'WAR')
+                    x = found[0]
+                    cur = healing.set_to_gear(x['gear'], checks.Items(), data)
+                    v, _ = healing.evaluate(x['kind'], cur, base, healing.spell_for_set(x['kind'], x['path'], job, 'WAR'))
+                    out['healing'] = {'sets': len(found), 'first': x['kind'], 'value': v, 'texts': len(data.text), 'base': base['MND']}
+                    break
+            if 'healing' in out:
                 break
         out['ok'] = True
     except Exception as e:
