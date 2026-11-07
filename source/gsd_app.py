@@ -54,7 +54,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.18.1'
+VERSION = '2.18.2'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -563,6 +563,7 @@ class App(tk.Tk):
             self.job_list.column(c, width=36, anchor='center')
         self.job_list.tag_configure('must', foreground='#c0392b')
         self.job_list.tag_configure('ok', foreground='#2e7d32')
+        self.job_list.tag_configure('new', foreground='#1f5fbf')
         self.job_list.pack(fill='both', expand=True, pady=(4, 0))
         self.job_list.bind('<<TreeviewSelect>>', lambda e: self.show_job())
         ttk.Label(left, text='✖ must fix   ⚠ should fix   ↑ upgrades', foreground='#666').pack(anchor='w', pady=(4, 0))
@@ -734,9 +735,19 @@ class App(tk.Tk):
                 for u in f['upgrades']:
                     if 'error' not in u and (5 <= u['gain'] <= 100 or u.get('dt_fix')):
                         self.job_ticks.add(('u', f['path'], u['set']))
+        # files in the folder that the last check-up didn't have (added since): listed too, "new" until Check now
+        for job in sorted({checks.job_of(p) or '?' for p in self._unchecked()} - set(jobs)):
+            t.insert('', 'end', iid='job:' + job, text=job + '  (new)', values=('', '', 'new'), tags=('new',))
         sel = 'job:' + keep if keep and t.exists('job:' + keep) else '__all__'
         t.selection_set(sel)
         self.show_job()
+
+    def _unchecked(self, job=None):
+        """GearSwap files in the folder now that the last check-up didn't read (added since it ran)."""
+        done = {os.path.normcase(f['path']) for f in (self.report or {}).get('files', [])}
+        files = getattr(self, '_known_files', None) or set(doctor.files_for(self.who.get()))
+        return sorted(p for p in files if os.path.normcase(p) not in done
+                      and (job is None or (checks.job_of(p) or '?') == job))
 
     def show_job(self):
         sel = self.job_list.selection()
@@ -761,7 +772,10 @@ class App(tk.Tk):
         files = self._files_of(job)
         self.job_title.config(text=f'{self.who.get()}  -  {job}')
         self.job_do.config(text=f'✔ Do everything for {job}')
-        self.job_files.config(text='Files: ' + ', '.join(f"{f['file']} ({f['sets']} sets)" for f in files))
+        new = [os.path.basename(p) for p in self._unchecked(job)]
+        self.job_files.config(text='Files: ' + ', '.join(f"{f['file']} ({f['sets']} sets)" for f in files)
+                              + (('  -  ' if files else '') + 'not checked yet: ' + ', '.join(new) + ' (click Check now)'
+                                 if new else ''))
         self.job_rowkey = {}
         for t in (self.jt_fix, self.jt_up, self.jt_look):
             t.delete(*t.get_children())
@@ -4065,6 +4079,9 @@ class App(tk.Tk):
             text += ' - gone: ' + ', '.join(gone)
         if not new and not gone:
             text += ' - no new files (changed files are read again)'
+        later = [os.path.basename(p) for p in self._unchecked()]
+        if later:
+            text += f' - not in the last check-up: {", ".join(later)} (click Check now to check them)'
         self.status.config(text=text)
 
     def change_character(self):
