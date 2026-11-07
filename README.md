@@ -1,4 +1,4 @@
-# GearSwap Doctor 2.17.0
+# GearSwap Doctor 2.18.0
 
 A free tool for Final Fantasy XI players who use **Windower 4 + GearSwap**. It checks your GearSwap files, fixes what
 can be fixed, and finds better weapon skill sets **from the gear you own**, using **wsdist** (Kastra's FFXI damage
@@ -24,6 +24,7 @@ simulator).
 | **Sets** | every set in every file in the game's equipment grid, problems marked |
 | **Build a set** | pick a weapon skill or TP set, **the weapon (main / sub)** and **how much damage taken, physical damage taken and magic damage taken it must have**; wsdist builds the best set from your own gear that has them (a few seconds). A quick **Buffs** list picks what's up while it's judged. Put it in that set or save it as a new set. The numbers are remembered per set and the check-ups use them |
 | **Nuke sets** | black, scholar and blue magic: every nuke set (elemental, magic burst, helix, Kaustra, Impact, magical blue spells) is judged by wsdist's spell maths - the damage of one cast of the spell it is for, a burst for a burst set, a Scholar's storm, Klimaform and Ebullience. The check-up finds better ones from your gear (a mage's weapons too); in Build a set pick the spell, magic burst and the rest. Physical and breath blue magic: points (wsdist has no maths for them) |
+| **Progression** | each job's gear goals - Artifact, Relic and Empyrean armor (iL109 to +4), JSE neck, Sortie earring, Ambuscade cape, Odyssey sets, Ultimate weapons: what you have (from your bags), the next step for every piece, where to go and what it takes (from BG Wiki), what to do next (by how many of your sets use it), and your own goals across jobs |
 | **My gear** | what the character owns, by bag, with a search |
 | **Backups** | every change is backed up first; put any backup back |
 | **Settings** | TP / enemy / **buffs** for the check-ups (None, Solo, Typical party or your own ticks: Haste, songs, rolls, bubbles, food, Aftermath), TP sets on/off and how they're judged, sub job per job, the daily check, folders |

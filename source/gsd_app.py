@@ -47,13 +47,14 @@ import gs_loader  # noqa: E402
 import gs_create  # noqa: E402
 import healing  # noqa: E402
 import magic  # noqa: E402
+import progression  # noqa: E402
 import idle     # noqa: E402
 import job_rules  # noqa: E402
 import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.17.0'
+VERSION = '2.18.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -217,6 +218,10 @@ GUIDE = """How to use GearSwap Doctor
 
 Nuke sets (black, scholar, blue magic): judged by the damage of one cast of their spell, from wsdist's spell maths. A burst set is
    judged as a magic burst, a Scholar's with its storm and Klimaform. In Build a set, pick the spell and tick Magic burst.
+
+Progression: pick a job - every gear goal (Artifact, Relic, Empyrean armor, JSE neck, Sortie earring, Ambuscade cape, Odyssey
+   sets, Ultimate weapons) with what you have, the next step and how to do it. "What to do next" puts the pieces your sets use
+   most first. Make any goal yours to see all of them together.
 
 Words
   Set        a group of gear GearSwap puts on for something, e.g. sets.precast.WS["Savage Blade"]
@@ -426,6 +431,7 @@ class App(tk.Tk):
         self._features_tab()
         self._create_tab()
         self._healing_tab()
+        self._progress_tab()
         self._overview_tab()
         self._problems_tab()
         self._upgrades_tab()
@@ -1656,6 +1662,197 @@ class App(tk.Tk):
         t.config(state='disabled')
         t.pack(fill='both', expand=True)
         ttk.Button(w, text='Close', command=w.destroy).pack(pady=6)
+
+    # ------------------------------------------------------------------ Progression
+    # His request 2026-11-07: "build a progression gear tab ... to help towards goals and what to do and how to do it. use
+    # the ffxibg and ffxiah as point of reference". progression.py: each job's gear goals (Artifact / Relic / Empyrean armor
+    # +1 to +4, JSE neck, Sortie earring, Ambuscade cape, Odyssey sets, Ultimate Weapons), what he has (his bags) and each
+    # piece's next step - where, and what it takes (BG Wiki). His goals are kept in the settings (prog_goals).
+    def _progress_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.tab_prog = tab
+        self.nb.add(tab, text='★ Progression')
+        bar = ttk.Frame(tab)
+        bar.pack(fill='x', pady=(0, 6))
+        ttk.Label(bar, text='Job').pack(side='left')
+        self.prog_job = ttk.Combobox(bar, values=JOBS, state='readonly', width=6)
+        self.prog_job.pack(side='left', padx=4)
+        self.prog_job.bind('<<ComboboxSelected>>', lambda e: self.prog_load())
+        ttk.Label(bar, text='Show').pack(side='left', padx=(10, 0))
+        self.prog_view = ttk.Combobox(bar, state='readonly', width=30,
+                                      values=['Everything for this job', 'What to do next (this job)', 'My goals (all jobs)'])
+        self.prog_view.set('Everything for this job')
+        self.prog_view.pack(side='left', padx=4)
+        self.prog_view.bind('<<ComboboxSelected>>', lambda e: self.prog_show())
+        self.prog_info = ttk.Label(bar, text='', foreground='#666')
+        self.prog_info.pack(side='left', padx=8)
+        frame, t = self._tree(tab, ('have', 'next', 'where', 'used'), ('You have', 'Next step', 'Where', 'Used in sets'),
+                              (290, 170, 290, 80), tree_width=250)
+        t.heading('#0', text='Goal / piece')
+        t.tag_configure('goal', font=('Segoe UI', 9, 'bold'))
+        t.tag_configure('done', foreground='#2e7d32')
+        t.tag_configure('miss', foreground='#b36b00')
+        t.tag_configure('mine', background='#fff7d6')
+        t.bind('<<TreeviewSelect>>', lambda e: self.prog_pick())
+        t.bind('<Double-1>', lambda e: self.prog_toggle_goal())
+        frame.pack(fill='both', expand=True)
+        self.prog_tree = t
+        how = ttk.LabelFrame(tab, text='How to do it', padding=6)
+        how.pack(fill='x', pady=(6, 0))
+        self.prog_how = self._textbox(how, height=5)
+        self.prog_how.pack(fill='x')
+        btns = ttk.Frame(how)
+        btns.pack(fill='x', pady=(4, 0))
+        self.prog_goal_btn = ttk.Button(btns, text='★ Make it one of my goals', command=self.prog_toggle_goal)
+        self.prog_goal_btn.pack(side='left')
+        self.prog_wiki_btn = ttk.Button(btns, text='Open the BG Wiki page', command=self.prog_wiki)
+        self.prog_wiki_btn.pack(side='left', padx=6)
+        ttk.Label(btns, text='From your saved bags (all bags). Ranks and augments aren\'t in the bags; BG Wiki checked '
+                  '2026-11. Nothing here changes a file.', foreground='#666').pack(side='left', padx=8)
+        ToolTip(self.prog_goal_btn, 'Goals are kept and shown together under "My goals (all jobs)". Double-clicking a row '
+                                    'does the same.')
+        self.prog_goals_now, self.prog_rows, self._prog_dirty = [], {}, True
+        self.nb.bind('<<NotebookTabChanged>>', lambda e: self.prog_load() if self._prog_dirty and
+                     str(self.nb.select()) == str(self.tab_prog) else None, add='+')
+
+    def prog_fill_jobs(self):
+        mine = []
+        for f in doctor.files_for(self.who.get()):
+            j = checks.job_of(f)
+            if j and j not in mine:
+                mine.append(j)
+        self.prog_job.configure(values=mine + [j for j in JOBS if j not in mine])
+        if self.prog_job.get() not in JOBS:
+            self.prog_job.set((mine or ['BLU'])[0])
+        self._prog_dirty = True
+        if str(self.nb.select()) == str(self.tab_prog):
+            self.prog_load()
+
+    def _prog_goals_of(self, job):
+        sets = []
+        for f in doctor.files_for(self.who.get()):
+            if checks.job_of(f) == job:
+                try:
+                    sets += self.loaded_file(f).sets
+                except Exception:
+                    pass
+        return progression.goals(job, checks.load_bags(self.who.get()) or {}, sets)
+
+    def prog_load(self):
+        self._prog_dirty = False
+        job = self.prog_job.get()
+        if job not in JOBS:
+            return
+        self.prog_info.config(text='reading...')
+        self.update_idletasks()
+        try:
+            self.prog_goals_now = self._prog_goals_of(job)
+        except Exception as e:
+            self.prog_goals_now = []
+            self.prog_info.config(text=f'Could not read the gear list: {e}')
+            return
+        self.prog_show()
+
+    def _prog_saved(self):
+        return list(self.cfg.get('prog_goals', []))
+
+    def prog_show(self):
+        t = self.prog_tree
+        t.delete(*t.get_children())
+        self.prog_rows = {}
+        view = self.prog_view.get()
+        mine = set(self._prog_saved())
+        if view.startswith('What to do next'):
+            for g, r in progression.next_steps(self.prog_goals_now, 15):
+                self._prog_row('', g, r, label=f'{g["title"].split(" (")[0]}: {r["slot"]}')
+            self.prog_info.config(text='Ordered by how many of your sets use the piece; missing pieces first.')
+            return
+        gs = self.prog_goals_now
+        if view.startswith('My goals'):
+            gs = []
+            cache = {self.prog_job.get(): self.prog_goals_now}
+            for key in sorted(mine):
+                job = key.split('|')[0]
+                if job not in cache:
+                    try:
+                        cache[job] = self._prog_goals_of(job)
+                    except Exception:
+                        cache[job] = []
+                gs += [dict(g, title=f'{job} - {g["title"]}') for g in cache[job] if g['key'] == key]
+            if not gs:
+                self.prog_info.config(text='No goals yet: pick a row and click "Make it one of my goals".')
+                return
+        for g in gs:
+            pct = progression.percent(g)
+            gid = t.insert('', 'end', text=('★ ' if g['key'] in mine else '') + g['title'],
+                           values=(f'{pct}%  ({g["summary"]})', '', '', ''), open=view.startswith('My goals'),
+                           tags=('goal', 'done' if pct == 100 else '', 'mine' if g['key'] in mine else ''))
+            self.prog_rows[gid] = (g, None)
+            for r in g['rows']:
+                self._prog_row(gid, g, r)
+        job = self.prog_job.get()
+        n = sum(1 for g in self.prog_goals_now for r in g['rows'] if 'next' in r)
+        self.prog_info.config(text=f'{job}: {n} pieces to get or upgrade' if not view.startswith('My goals') else
+                              f'{len(gs)} goals')
+
+    def _prog_row(self, parent, g, r, label=None):
+        have = r['have_name'] or 'not yet'
+        if r.get('kinds'):
+            have += f' ({r["kinds"]} kinds in your sets)'
+        nxt = r.get('next_name') or ('done' if r['have'] is not None else '')
+        iid = self.prog_tree.insert(parent, 'end', text=label or r['slot'],
+                                    values=(have, nxt, r.get('where', '') if 'next' in r else '', r.get('used', 0) or ''),
+                                    tags=('done' if 'next' not in r else 'miss' if r['have'] is None else '',))
+        self.prog_rows[iid] = (g, r)
+
+    def prog_pick(self):
+        x = self._prog_selected()
+        if not x:
+            return
+        g, r = x
+        mine = g['key'] in self._prog_saved()
+        self.prog_goal_btn.config(text='Take it off my goals' if mine else '★ Make it one of my goals')
+        if r is None:
+            todo = [y for y in g['rows'] if 'next' in y]
+            text = (f'{g["title"]}: {g["summary"]} ({progression.percent(g)}%).\n' +
+                    (f'{len(todo)} pieces still to get or upgrade. Open it and pick a piece for what to do.' if todo else
+                     'Done - nothing more to get.'))
+        elif 'next' not in r:
+            text = f'{r["have_name"]}: done (the best there is).'
+            if r.get('how'):
+                text += '\nMaking more kinds: ' + r['how']
+        else:
+            text = (f'Next: {r["next_name"]}' + (f' (you have {r["have_name"]})' if r['have_name'] else '') +
+                    (f' - used in {r["used"]} of your sets' if r.get('used') else '') + f'.\nWhere: {r["where"]}\n{r["how"]}')
+        self._say(self.prog_how, text)
+
+    def _prog_selected(self):
+        sel = self.prog_tree.selection()
+        return self.prog_rows.get(sel[0]) if sel else None
+
+    def prog_toggle_goal(self):
+        x = self._prog_selected()
+        if not x:
+            return
+        key = x[0]['key']
+        goals = self._prog_saved()
+        if key in goals:
+            goals.remove(key)
+        else:
+            goals.append(key)
+        self.cfg['prog_goals'] = goals
+        save_settings(self.cfg)
+        self.prog_show()
+        self.prog_info.config(text=('Goal kept: ' if key in goals else 'Goal taken off: ') + key.replace('|', ' '))
+
+    def prog_wiki(self):
+        x = self._prog_selected()
+        url = (x[1] or {}).get('wiki') if x else None
+        if not url and x:
+            url = next((r.get('wiki') for r in x[0]['rows'] if r.get('wiki')), None)
+        if url:
+            import webbrowser
+            webbrowser.open(url)
 
     # ------------------------------------------------------------------ Healing
     # His request 2026-10-30: "do research, and figure out how to add in a features for healing and making healing sets".
@@ -3861,6 +4058,7 @@ class App(tk.Tk):
         self.fill_jobs()
         self.feat_fill_files()
         self.heal_fill_files()
+        self.prog_fill_jobs()
         self.fill_overview()
         self.fill_problems()
         self.fill_upgrades()
@@ -4260,6 +4458,11 @@ def selftest(out_path):
                             'Thunder VI burst': magic.value('BLM', 'RDM', 'Thunder VI', staff, opts={'burst': True})}
         except Exception as e:
             out['magic'] = f'error: {e}'
+        try:
+            gs = progression.goals('BLU', {})
+            out['progression'] = {g['key']: g['total'] for g in gs}
+        except Exception as e:
+            out['progression'] = f'error: {e}'
         out['ok'] = True
     except Exception as e:
         import traceback
