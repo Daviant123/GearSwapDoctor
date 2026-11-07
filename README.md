@@ -1,4 +1,4 @@
-# GearSwap Doctor 2.18.0
+# GearSwap Doctor 2.18.1
 
 A free tool for Final Fantasy XI players who use **Windower 4 + GearSwap**. It checks your GearSwap files, fixes what
 can be fixed, and finds better weapon skill sets **from the gear you own**, using **wsdist** (Kastra's FFXI damage

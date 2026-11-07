@@ -54,7 +54,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.18.0'
+VERSION = '2.18.1'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -413,8 +413,13 @@ class App(tk.Tk):
         cb = ttk.Combobox(top, textvariable=self.who, values=self.chars, state='readonly', width=16)
         cb.pack(side='left', padx=6)
         cb.bind('<<ComboboxSelected>>', lambda e: self.change_character())
+        self.who_box = cb
         self.check_btn = ttk.Button(top, text='Check now', style='Big.TButton', command=self.run_check)
         self.check_btn.pack(side='left', padx=6)
+        self.refresh_btn = ttk.Button(top, text='⟳ Refresh files', command=self.refresh_files)
+        self.refresh_btn.pack(side='left', padx=(0, 6))
+        ToolTip(self.refresh_btn, 'Looks in the GearSwap folder again: new .lua files (and new characters) show up, and '
+                                  'files changed outside the program are read again. Changes nothing.')
         self.progress = ttk.Progressbar(top, mode='indeterminate', length=160)
         self.progress.pack(side='left', padx=6)
         self.status = ttk.Label(top, text='')
@@ -4035,6 +4040,33 @@ class App(tk.Tk):
         messagebox.showinfo('GearSwap Doctor', 'Saved. The next Check now uses them.')
 
     # ------------------------------------------------------------------ report
+    def refresh_files(self):
+        """His request 2026-11-07: "add a refresh button for the program to look into the gearswap folder again and see new
+        luas". Reads the folder again (new files, new characters) and forgets the files it had read, so edits made outside
+        the program show too. The last check-up stays."""
+        if self.busy:
+            return
+        before = getattr(self, '_known_files', set())        # (the files the lists were last filled with)
+        found = characters()
+        if found:
+            self.chars = found
+            self.who_box.configure(values=found)
+            if self.who.get() not in found:
+                self.who.set(found[0])
+        self.loaded.clear()
+        self.fill()
+        now = set(doctor.files_for(self.who.get()))
+        new = sorted(os.path.basename(p) for p in now - before)
+        gone = sorted(os.path.basename(p) for p in before - now)
+        text = f'{len(now)} GearSwap files for {self.who.get()}'
+        if new:
+            text += ' - new: ' + ', '.join(new)
+        if gone:
+            text += ' - gone: ' + ', '.join(gone)
+        if not new and not gone:
+            text += ' - no new files (changed files are read again)'
+        self.status.config(text=text)
+
     def change_character(self):
         self.cfg['character'] = self.who.get()
         save_settings(self.cfg)
@@ -4049,7 +4081,9 @@ class App(tk.Tk):
         self.rows, self.ticked, self.info = {}, set(), {}
         self._update_tick_label()
         r = self.report
-        names = [os.path.basename(p) for p in doctor.files_for(self.who.get())]
+        files = doctor.files_for(self.who.get())
+        self._known_files = set(files)
+        names = [os.path.basename(p) for p in files]
         self.sim_file.configure(values=names)
         if names and self.sim_file.get() not in names:
             self.sim_file.set(names[0])
