@@ -55,8 +55,9 @@ class Items:
                 continue
             iid, en, enl, rest = int(m.group(1)), en.group(1), enl.group(1) if enl else en.group(1), body
             f = dict(re.findall(r'(\w+)=(\d+)', rest))
+            at = re.search(r'ammo_type="(\w+)"', body)
             it = {'id': iid, 'en': en, 'enl': enl, 'jobs': int(f.get('jobs', 0)), 'slots': int(f.get('slots', 0)),
-                  'level': int(f.get('level', 0))}
+                  'level': int(f.get('level', 0)), 'ammo_type': at.group(1) if at else None}
             self.by_id[iid] = it
             for n in (en.lower(), enl.lower()):
                 self.by_name.setdefault(n, []).append(it)

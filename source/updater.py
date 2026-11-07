@@ -46,7 +46,13 @@ FIXES = [('get_pdif.py',
           '    _gsd_p = max(-50, _gsd_p0.stats.get("PDT",0) + _gsd_p0.stats.get("DT",0)) + _gsd_p0.stats.get("PDT2",0) + _gsd_p0.stats.get("DT2",0)\n'
           '    _gsd_m = max(-50, _gsd_p0.stats.get("MDT",0) + _gsd_p0.stats.get("DT",0)) + _gsd_p0.stats.get("MDT2",0) + _gsd_p0.stats.get("DT2",0)\n'
           '    if (pdt_thresh < 0 or mdt_thresh < 0) and _gsd_p <= pdt_thresh and _gsd_m <= mdt_thresh:\n'
-          '        pdt_thresh_temp, mdt_thresh_temp = pdt_thresh, mdt_thresh\n')]
+          '        pdt_thresh_temp, mdt_thresh_temp = pdt_thresh, mdt_thresh\n'),
+         # a blue magic spell: wsdist's own maths has it (cast_spell's "Blue Magic"), but build_set calls every spell that isn't a
+         # Quick Draw, a ranged attack or Ninjutsu "Elemental Magic", which has no blue spells (his request 2026-11-07)
+         ('wsdist.py',
+          '        spell_type = "Ninjutsu"\n    else:\n        spell_type = "Elemental Magic"\n',
+          '        spell_type = "Ninjutsu"\n    elif spell_name in globals().get("blu_spell_data", {}):  # (GearSwap Doctor: blue magic, magic.BLUE)\n        spell_type = "Blue Magic"\n'
+          '    else:\n        spell_type = "Elemental Magic"\n')]
 
 
 def apply_fixes(folder=None):

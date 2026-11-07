@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 3.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 4.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 3, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 4, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -424,6 +424,7 @@ end
 
 -- what happens before your own precast: Echo Drops when silenced, cancel Sneak for Spectral Jig
 function G.pre(spell)
+    if spell.type == 'WeaponSkill' then G.ws_tp = math.floor((player.tp or 0) / 500) * 500 end
     if on('silence') and spell.action_type == 'Magic' and buff('silence') then
         cancel_spell()
         local item = cfg.silence.item or 'Echo Drops'
@@ -620,6 +621,63 @@ local function on_spell(act)
     end
 end
 
+-- Real fights (his request 2026-10-31): your own hits and weapon skills, added up and written to a file now and then, so GearSwap Doctor can set them beside wsdist's numbers.
+-- Only reads what the game shows you; nothing is sent. data\gsd_fights_<Name>.csv: see real_fights.py.
+local FIGHT_HIT, FIGHT_CRIT, FIGHT_MISS = { [1] = true, [67] = true }, { [67] = true }, { [15] = true, [63] = true }
+local WS_HIT, WS_MISS = { [185] = true, [187] = true }, { [188] = true }     -- (res action_messages.lua: damage, HP drained; a miss)
+local function fight_am()
+    return G.am_level and (G.am_level() or -1) or -1
+end
+local function fight_add(mob, kind, name, tp, damage, crit, miss)
+    local main = player and player.equipment and name_of(player.equipment.main) or ''
+    local key = table.concat({ (tostring(mob):gsub(',', ' ')), kind, name, tostring(main):gsub(',', ' '), tostring(fight_am()), tostring(tp) }, ',')
+    local t = G.fights[key] or { n = 0, total = 0, crits = 0, miss = 0 }
+    t.n, t.total = t.n + 1, t.total + (damage or 0)
+    if crit then t.crits = t.crits + 1 end
+    if miss then t.miss = t.miss + 1 end
+    G.fights[key] = t
+    G.fights_any = true
+end
+function G.fights_flush()
+    if not on('fights') or not G.fights_any or not player or not player.name then return end
+    local io_ = gearswap and gearswap.io
+    local folder = rawget(_G, 'lua_base_path') or (windower and windower.addon_path)
+    if not io_ or type(folder) ~= 'string' then return end
+    local f = io_.open(folder .. 'data/gsd_fights_' .. player.name .. '.csv', 'a')
+    if not f then return end
+    local now = os.time and os.time() or 0
+    for key, t in pairs(G.fights) do
+        local mob, kind, name, main, am, tp = key:match('^([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*)$')
+        if mob then
+            f:write(table.concat({ now, player.main_job or '', player.sub_job or '', mob, kind, name, main, am, tp, t.n, t.total, t.crits, t.miss }, ','), '\n')
+        end
+    end
+    f:close()
+    G.fights, G.fights_any = {}, false
+end
+local function on_fight(act)
+    if not on('fights') or not act or act.actor_id ~= me_id() then return end
+    if act.category ~= 1 and act.category ~= 3 then return end
+    local ws
+    if act.category == 3 then
+        local r = gearswap and gearswap.res and gearswap.res.weapon_skills and gearswap.res.weapon_skills[act.param]
+        ws = r and r.en
+        if not ws then return end
+    end
+    for _, t in ipairs(act.targets or {}) do
+        local m = windower.ffxi.get_mob_by_id(t.id)
+        if m and m.is_npc ~= false and m.name then
+            for _, a in ipairs(t.actions or {}) do
+                if ws then
+                    if WS_HIT[a.message] then fight_add(m.name, 'ws', ws, G.ws_tp or 0, a.param, false, false)
+                    elseif WS_MISS[a.message] then fight_add(m.name, 'ws', ws, G.ws_tp or 0, 0, false, true) end
+                elseif FIGHT_HIT[a.message] then fight_add(m.name, 'melee', '', 0, a.param, FIGHT_CRIT[a.message], false)
+                elseif FIGHT_MISS[a.message] then fight_add(m.name, 'melee', '', 0, 0, false, true) end
+            end
+        end
+    end
+end
+
 -- buffs: doom message / Holy Water, rings unlock when the experience ring's buff lands
 function G.buff(name, gain)
     local n = low(name)
@@ -680,6 +738,10 @@ local function tick()
         send_command('gs c gsd refresh')
     end
     G.haste_tick(status)
+    if on('fights') and now - (G.fights_t or 0) > 60 then
+        G.fights_t = now
+        pcall(G.fights_flush)
+    end
 end
 
 local function on_action(act)
@@ -737,10 +799,15 @@ function G.install()
     end
     wrap('file_unload', nil, function()
         for _, k in ipairs(G.binds) do send_command('unbind ' .. k) end
+        pcall(G.fights_flush)
         if G.box and G.box.destroy then G.box:destroy() end
     end)
-    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') then
+    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') then
         windower.raw_register_event('prerender', tick)
+    end
+    if on('fights') then
+        G.fights = {}
+        windower.raw_register_event('action', function(act) pcall(on_fight, act) end)
     end
     if on('haste') then windower.raw_register_event('action', on_spell) end
     if on('th') then windower.raw_register_event('action', on_action) end

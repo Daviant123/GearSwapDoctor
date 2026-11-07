@@ -11,6 +11,7 @@ import re
 
 import fixer
 import healing
+import job_rules
 
 # points for 1 % physical / magic damage taken, 1 Refresh, 1 Regen, 1 Magic Evasion, 1 Magic Def. Bonus, 1 % movement. A set at the DT cap gets no more for
 # more DT, so then the rest decides: the usual order of an idle set.
@@ -126,7 +127,8 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     keys = {k.lower() for k in set_gear}
     keep = keep_weapons if keep_weapons is not None else (job or '').upper() not in healing.MAGE_JOBS
     # (anything in the range slot stays, and an instrument or bell there leaves no room for ammo)
-    pool = [c for c in useful(cands) if not (({'range', 'ranged'} & keys) and healing.fits(c, 'ammo'))]
+    no_ammo = job_rules.lock_ammo(job, set_gear) or bool({'range', 'ranged'} & keys)
+    pool = [c for c in useful(cands) if not (no_ammo and healing.fits(c, 'ammo'))]
     notes = [f'judged for: {focus}']
     if keep and 'main' in keys or keep and 'sub' in keys:
         notes.append('weapons kept: a new weapon throws away your TP')

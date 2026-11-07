@@ -232,9 +232,9 @@ def plan_set(names, path, gear, job, sub, owned_ids, items, index, buffs=None, w
     if out['error']:
         return out
     if ws:
-        owned, cur, notes, out['skill'] = W.plan_ws(job, sub, ws, gear, weapons, owned_ids, items, index)
+        owned, cur, notes, out['skill'] = W.plan_ws(job, sub, ws, gear, weapons, owned_ids, items, index, file_range=names.file_range)
     else:
-        owned, cur, notes = plan_tp(job, sub, gear, weapons, main_ws, owned_ids, items, index)
+        owned, cur, notes = plan_tp(job, sub, gear, weapons, main_ws, owned_ids, items, index, names.file_range)
     main = cur.get('main')
     out.update(owned=owned, cur=cur)
     if main:
@@ -285,9 +285,10 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
     weapons = [(s['path'], s['gear']) for s in loaded.sets if s['path'].startswith('sets.weapons')]
     weapons += [(s['path'], s['gear']) for s in loaded.sets if not s['path'].startswith('sets.weapons') and 'main' in s['gear']]
     out = []
+    import pld
     for s in loaded.sets:
         ws = ws_of(s['path'], known)
-        if not ws or (only and ws not in only):
+        if not ws or (only and ws not in only) or pld.takes(s['path'], job):      # (a PLD's Atonement is about enmity: pld_upgrades)
             continue
         if progress:
             progress(f'wsdist: {ws}')
@@ -305,6 +306,12 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
                 out.append({'set': s['path'], 'ws': ws, 'error': f'no {skill or "matching"} weapon {job} can use in the bags to test it with'})
                 continue
             req = W.dt_requirement((targets or {}).get(s['path']))
+            kept = False
+            if req is None and job == 'PLD':                      # (the guide's WS sets keep damage taken capped: a tank still gets hit)
+                req = keep_dt(s['gear'], items)
+                kept = bool(req)
+                if req:
+                    notes = notes + [f'damage taken kept as it is now ({-req[0]:.0f} % / {-req[1]:.0f} %), as a tank']
             info = {}
             best, dmg, now = W.best_ws_set(job, sub, ws, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=plan['spec'])
             if stats is not None:
@@ -340,11 +347,88 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
             notes = notes + ['augment path assumed: ' + ', '.join(assumed)]
         gain = (dmg - now) / now * 100 if now else 0
         dtf = _dt_fields(info, req)
-        dt_fix = bool(req) and not dtf.get('dt_was_met') and changes      # his damage taken, even if it costs damage
+        dt_fix = bool(req) and not kept and not dtf.get('dt_was_met') and changes      # his damage taken, even if it costs damage (not the tank's own: only a gain)
         if changes and (gain >= 1 or dt_fix):
             out.append(dict({'set': s['path'], 'ws': ws, 'now': round(now), 'best': round(dmg), 'gain': round(gain, 1),
                              'changes': changes, 'notes': notes, 'dt_fix': bool(dt_fix)}, **dtf))
     return out
+
+
+def magic_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, enemy='Apex Toad', targets=None, buffs=None, stats=None,
+                   limit=8):
+    """Nuke sets - black, scholar and blue magic (magic.py; his request 2026-11-07): [{set, ws: 'Magic: <spell>', kind: 'magic', now,
+    best, gain, changes, notes, spell, opts}]. A mage's set may change its weapons too. At most `limit` sets a file (the shortest
+    names first)."""
+    import magic
+    import wsdist_runner as W
+    weapons = [(s['path'], s['gear']) for s in loaded.sets if s['path'].startswith('sets.weapons')]
+    weapons += [(s['path'], s['gear']) for s in loaded.sets if not s['path'].startswith('sets.weapons') and 'main' in s['gear']]
+    rows = [s for s in loaded.sets if magic.spell_for(s['path'], job)]
+    rows.sort(key=lambda s: (s['path'].count('.') + s['path'].count('['), len(s['path'])))
+    wanted = [s for s in rows if (targets or {}).get(s['path'])]
+    out = []
+    for s in rows[:limit] + [s for s in wanted if s not in rows[:limit]]:
+        tg = (targets or {}).get(s['path']) or {}
+        spell, burst = magic.spell_for(s['path'], job)
+        spell = tg.get('spell') or spell
+        opts = dict(magic.default_options(job, spell, burst), **(tg.get('magic') or {}))
+        label = 'Magic: ' + magic.words(spell, opts)
+        if progress:
+            progress(f'wsdist: {label}')
+        try:
+            free = magic.free_weapons(job) and not (tg.get('main') or tg.get('sub'))
+            worn, under = magic.merged_gear(loaded, s['path'], job)
+            owned, cur, notes = magic.plan(job, sub, with_weapons(worn, tg), weapons, owned_ids, items, index, free=free)
+            if under:
+                notes = notes + [f'judged as worn: on top of {under}']
+            req = W.dt_requirement(tg)
+            info = {}
+            best, dmg, now = magic.best_set(job, sub, spell, owned, cur, enemy_name=enemy, req=req, info=info, buffs=buffs, opts=opts)
+        except Exception as e:
+            out.append({'set': s['path'], 'ws': label, 'kind': 'magic', 'error': f'wsdist could not simulate it: {e}'})
+            continue
+        changes = {}
+        for slot, gs in W.GS_SLOT.items():
+            if slot == 'ranged' or (slot in ('main', 'sub') and not free):
+                continue
+            a = cur.get(slot, {}).get('Name2') if cur.get(slot) else None
+            b = best[slot]['Name2'] if best.get(slot) and best[slot]['Name'] != 'Empty' else None
+            if b and a != b:
+                changes[gs] = _gs_name(best[slot], items)
+        for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):
+            w1, w2 = W.SLOT_MAP[p1], W.SLOT_MAP[p2]
+            cp_ = [cur.get(w1, {}).get('Name') if cur.get(w1) else None, cur.get(w2, {}).get('Name') if cur.get(w2) else None]
+            bp_ = [best[w1]['Name'] if best[w1]['Name'] != 'Empty' else None, best[w2]['Name'] if best[w2]['Name'] != 'Empty' else None]
+            if _pairs_same(cp_, bp_):
+                changes.pop(p1, None)
+                changes.pop(p2, None)
+        assumed = [best[sl]['Name2'] for sl in best if best[sl]['Name2'] != best[sl]['Name'] and W.GS_SLOT.get(sl) in changes]
+        if assumed:
+            notes = notes + ['augment path assumed: ' + ', '.join(assumed)]
+        magic.hood_fix(changes, (best.get('body') or {}).get('Name'), cur.get('head') or magic.head_in(worn))
+        gain = (dmg - now) / now * 100 if now else 0
+        dtf = _dt_fields(info, req)
+        dt_fix = bool(req) and not dtf.get('dt_was_met') and changes
+        entry = None
+        if changes and (gain >= 1 or dt_fix):
+            entry = dict({'set': s['path'], 'ws': label, 'kind': 'magic', 'spell': spell, 'opts': opts, 'now': round(now), 'best': round(dmg),
+                          'gain': round(gain, 1), 'changes': changes, 'notes': notes, 'dt_fix': bool(dt_fix)}, **dtf)
+            out.append(entry)
+        if stats is not None:
+            stats.setdefault('judged', []).append({'set': s['path'], 'weapon': (cur.get('main') or {}).get('Name2'), 'spell': spell,
+                                                   'opts': opts, 'notes': notes, 'upgrade': bool(entry)})
+    return out
+
+
+def keep_dt(gear, items):
+    """(PDT, MDT) a set has now, as wsdist's requirement (-50, -38); None when it has none."""
+    global _IDLE_DATA
+    import healing
+    if _IDLE_DATA is None:
+        _IDLE_DATA = healing.ItemData()
+    pd, md = healing.dt_totals(healing.totals(healing.set_to_gear(gear, items, _IDLE_DATA)))
+    pd, md = min(50, pd), min(50, md)
+    return (-float(pd), -float(md)) if pd or md else None
 
 
 def tp_ws_damage(loaded, job, sub, cur, owned_ids, items, index, ws_tp, enemy, buffs, cache=None):
@@ -410,8 +494,9 @@ def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
     cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
     out = []
-    todo = idle.checked_sets(loaded)
-    wanted = [s for s in loaded.sets if idle.is_idle(s['path']) and (targets or {}).get(s['path']) and s not in todo]
+    import pld
+    todo = [s for s in idle.checked_sets(loaded, limit=40) if not pld.takes(s['path'], job)][:6]     # (a PLD's tank sets: pld_upgrades)
+    wanted = [s for s in loaded.sets if idle.is_idle(s['path']) and (targets or {}).get(s['path']) and s not in todo and not pld.takes(s['path'], job)]
     for s in todo + wanted:
         target = (targets or {}).get(s['path']) or {}
         need = {k: min(50, int(target.get(k) or 0)) for k in ('dt', 'pdt', 'mdt') if target.get(k)}
@@ -429,6 +514,122 @@ def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
                              'now_text': idle.words(r['n_now'], r['base']), 'best_text': idle.words(r['n_best'], r['base']), 'changes': changes, 'notes': r['notes'],
                              'dt_fix': dt_fix}, **dtf))
     return out
+
+
+def gear_file(path):
+    """A Selindrile / Mote job file holds the rules; the sets are in <Name>_<JOB>_gear.lua beside it (any capitals). None if there isn't one."""
+    folder, base = os.path.split(path)
+    want = os.path.splitext(base)[0].lower() + '_gear.lua'
+    try:
+        for n in os.listdir(folder or '.'):
+            if n.lower() == want:
+                return os.path.join(folder, n)
+    except OSError:
+        pass
+    return None
+
+
+def pet_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
+    """Automaton sets (pup.py), the same kind of entries as idle_upgrades. kind 'pet'."""
+    global _IDLE_DATA
+    import healing
+    import pup
+    if _IDLE_DATA is None:
+        _IDLE_DATA = healing.ItemData()
+    counts, seen = {}, set()
+    for b, c in bags.items():
+        if not b.startswith('_') and b in checks.EQUIP_BAGS:
+            for iid, n in c.items():
+                it = items.by_id.get(iid)
+                if it:
+                    counts[it['en']] = counts.get(it['en'], 0) + n
+                    seen.add(iid)
+    owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
+    out = []
+    for s in pup.checked_sets(loaded):
+        target = (targets or {}).get(s['path']) or {}
+        need = {k: min(50, int(target.get(k) or 0)) for k in ('dt', 'pdt', 'mdt') if target.get(k)}
+        r = pup.judge(s['path'], s['gear'], job, sub, cands, counts, items, _IDLE_DATA, need=need)
+        if stats is not None:
+            stats.setdefault('judged', []).append({'set': s['path'], 'focus': r['focus'], 'now': pup.words(r['n_now'], r['focus']), 'best': pup.words(r['n_best'], r['focus'])})
+        gain = (r['val'] - r['now']) / r['now'] * 100 if r['now'] else (100 if r['val'] > 0 else 0)
+        if r['changes'] and gain >= 1:
+            changes = {k: (v['name'] if isinstance(v, dict) else v) for k, v in r['changes'].items()}
+            out.append({'set': s['path'], 'ws': 'Automaton: ' + s['path'][len('sets.'):], 'kind': 'pet', 'now': r['now'], 'best': r['val'], 'gain': round(gain, 1), 'unit': 'pet',
+                        'now_text': pup.words(r['n_now'], r['focus']), 'best_text': pup.words(r['n_best'], r['focus']), 'changes': changes, 'notes': r['notes'], 'dt_fix': False})
+    return out
+
+
+def need_of(target, sird=False):
+    """What a set must have from his numbers ({'dt', 'pdt', 'mdt', 'sird'}): damage taken up to 50 %; interruption down as he typed it, with 5/5 merits
+    (10 %) taken off for what gear must give."""
+    need = {k: min(50, int(target.get(k) or 0)) for k in ('dt', 'pdt', 'mdt') if target.get(k)}
+    if sird and target.get('sird'):
+        import pld
+        need['sird'] = max(0, min(pld.SIRD_CAP, int(target['sird'])) - pld.SIRD_MERITS)
+    return need
+
+
+def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=None, only=None):
+    """A Paladin's tank sets (pld.py: the FFXIAH PLD guide's rules), the same kind of entries as idle_upgrades. kind 'pld'."""
+    global _IDLE_DATA
+    import healing
+    import pld
+    if _IDLE_DATA is None:
+        _IDLE_DATA = healing.ItemData()
+    counts, seen = {}, set()
+    for b, c in bags.items():
+        if not b.startswith('_') and b in checks.EQUIP_BAGS:
+            for iid, n in c.items():
+                it = items.by_id.get(iid)
+                if it:
+                    counts[it['en']] = counts.get(it['en'], 0) + n
+                    seen.add(iid)
+    owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
+    ihp = pld.idle_hp(loaded, items, _IDLE_DATA, counts)
+    out, done = [], {}
+    for s in pld.checked_sets(loaded, limit):
+        if only and s['path'] != only:
+            continue
+        target = (targets or {}).get(s['path']) or {}
+        need = need_of(target, sird=True)
+        # (his ability sets are often the same gear: the same set for the same purpose is worked out once)
+        key = (pld.focus_for(s['path']), tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in s['gear'].items())), tuple(sorted(need.items())),
+               s['path'].startswith('sets.buff'))
+        if key in done:
+            r = done[key]
+        else:
+            r = done[key] = pld.judge(s['path'], s['gear'], job, sub, cands, counts, items, _IDLE_DATA, need=need, idle_hp=ihp)
+        tip = pld.advice(r['n_best'], r['focus'], ihp)
+        if stats is not None:
+            stats.setdefault('judged', []).append({'set': s['path'], 'focus': r['focus'], 'now': pld.words(r['n_now'], r['focus']), 'best': pld.words(r['n_best'], r['focus']), 'tip': tip})
+        gain = (r['val'] - r['now']) / r['now'] * 100 if r['now'] else (100 if r['val'] > 0 else 0)
+        fix = bool(need) and r.get('short_now', 0) > r['short']          # (it gets the numbers he set, even if something else costs)
+        if r['changes'] and (gain >= 1 or fix):
+            changes = {k: (v['name'] if isinstance(v, dict) else v) for k, v in r['changes'].items()}
+            out.append({'set': s['path'], 'ws': 'Tank: ' + s['path'][len('sets.'):], 'kind': 'pld', 'now': r['now'], 'best': r['val'], 'gain': round(gain, 1), 'unit': 'pld',
+                        'now_text': pld.words(r['n_now'], r['focus']), 'best_text': pld.words(r['n_best'], r['focus']), 'changes': changes,
+                        'notes': r['notes'] + ([tip] if tip else []) + ([f"short of what you set by {r['short']}"] if r['short'] else []), 'dt_fix': fix})
+    return out
+
+
+def replan(character, path, set_path, sub, target):
+    """One set again with his numbers, quickly: a PLD's tank set (pld.py) or an idle set (idle.py). Returns its upgrades ([] = nothing better), or None for a
+    set wsdist judges (weapon skills, TP: the next Check now uses his numbers)."""
+    import idle
+    import pld
+    job = checks.job_of(path)
+    loaded = gs_loader.load(path)
+    items = checks.Items()
+    bags = checks.load_bags(character) or {}
+    tg = {set_path: target} if target else {}
+    if pld.takes(set_path, job):
+        return pld_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path)
+    if idle.is_idle(set_path):
+        return [u for u in idle_upgrades(loaded, job, sub, bags, items, targets=tg) if u['set'] == set_path]
+    return None
 
 
 def is_tp_set(path):
@@ -471,7 +672,11 @@ def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=
     import wsdist_runner as W
     weapons, main_ws = tp_weapons(loaded)
     names = set_name.FileInfo(loaded, index)
-    tps = sorted((s for s in loaded.sets if is_tp_set(s['path'])), key=lambda s: (s['path'].count('.'), len(s['path'])))
+    import pup
+    # (a PUP's sets for the automaton aren't about the master's speed: pet_upgrades)
+    import pld
+    tps = sorted((s for s in loaded.sets if is_tp_set(s['path']) and not pup.is_pet_set(s['path'], job) and not pld.takes(s['path'], job)),
+                 key=lambda s: (s['path'].count('.'), len(s['path'])))
     stats = stats if stats is not None else {}
     stats.update(total=len(tps), checked=0, same=0, not_checked={}, stopped=False)
     out = []
@@ -637,12 +842,12 @@ def am_build(loaded, m, job, sub, owned_ids, items, index, buffs=None, ws_tp=100
     return dict(m, gear=gear, now=now, best=val, unit=info.get('metric', metric), notes=notes + _am_notes(info))
 
 
-def plan_tp(job, sub, gear, weapons, main_ws, owned_ids, items, index):
+def plan_tp(job, sub, gear, weapons, main_ws, owned_ids, items, index, file_range=False):
     """wsdist_runner.plan_ws for a TP set: any weapon from the weapon sets, else the file's main weapon skill's."""
     import wsdist_runner as W
-    owned, cur, notes, _ = W.plan_ws(job, sub, None, gear, weapons, owned_ids, items, index)
+    owned, cur, notes, _ = W.plan_ws(job, sub, None, gear, weapons, owned_ids, items, index, file_range=file_range)
     if 'main' not in cur and main_ws:
-        owned, cur, notes, _ = W.plan_ws(job, sub, main_ws, gear, weapons, owned_ids, items, index)
+        owned, cur, notes, _ = W.plan_ws(job, sub, main_ws, gear, weapons, owned_ids, items, index, file_range=file_range)
     return owned, cur, notes
 
 
@@ -661,12 +866,14 @@ def _am_notes(info):
 def tp_checked_text(f):
     """For the app: 'TP sets: 30 of 91 checked...'; '' for a file without TP sets or an older report."""
     if not f.get('tp_total'):
-        return ''
+        return f.get('pld_coverage', '')
     text = f"TP sets: {f.get('tp_checked', 0)} of {f['tp_total']} checked, one per weapon and mode first"
     if f.get('tp_stopped'):
         text += ' (stopped at the time limit)'
     if f.get('tp_not_checked'):
         text += '; not checked: ' + ', '.join(f'{n} ({why})' for why, n in f['tp_not_checked'].items())
+    if f.get('pld_coverage'):
+        text = f['pld_coverage'] + '.  ' + text
     return text
 
 
@@ -735,6 +942,18 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
         job = checks.job_of(path)
         entry = {'file': os.path.basename(path), 'path': path, 'job': job, 'sets': len(loaded.sets),
                  'problems': checks.check(loaded, items, bags, job), 'upgrades': []}
+        import job_rules
+        if job == 'PLD' and not loaded.error:            # (the guide's HP order: GearSwap puts the highest priority on first)
+            import pld
+            try:
+                order = pld.hp_order(loaded, open(path, encoding='utf-8', errors='replace').read())
+            except Exception:
+                order = {}
+            if order:
+                entry['hp_order'] = order
+        for p in job_rules.ammo_problems(loaded, items, job, owned_ids):
+            entry['problems'].append({'kind': 'ammo', 'item': p['item'], 'slot': 'ammo', 'sets': p['sets'], 'fix': p['fix'],
+                                      'detail': f"Not a bullet: it takes your gun off. Put back: {p['fix'] or 'a bullet'}"})
         if index is not None and job and not loaded.error:
             js = sub.get(job, 'WAR') if isinstance(sub, dict) else sub
             tg = (targets or {}).get(os.path.basename(path)) or {}
@@ -746,8 +965,25 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
                                                  enemy=enemy, metric=tp_metric, targets=tg, buffs=spec, stats=tp_stats)
                 entry.update(tp_total=tp_stats['total'], tp_checked=tp_stats['checked'], tp_not_checked=tp_stats['not_checked'],
                              tp_stopped=tp_stats['stopped'])
+            if job in ('BLM', 'SCH', 'BLU', 'RDM', 'GEO', 'DRK'):
+                mstats = {}
+                entry['upgrades'] += magic_upgrades(loaded, job, js, owned_ids, items, index, progress=progress, enemy=enemy, targets=tg,
+                                                    buffs=spec, stats=mstats)
+                entry['magic_judged'] = mstats.get('judged', [])
             idle_stats = {}
             entry['upgrades'] += idle_upgrades(loaded, job, js, bags, items, targets=tg, stats=idle_stats)
+            if job == 'PLD':
+                pld_stats = {}
+                if progress:
+                    progress('the PLD guide: tank sets')
+                entry['upgrades'] += pld_upgrades(loaded, job, js, bags, items, targets=tg, stats=pld_stats)
+                entry['pld_judged'] = pld_stats.get('judged', [])
+                import pld
+                entry['pld_coverage'] = pld.coverage_text(pld.coverage(loaded), len(entry['pld_judged']))
+            if job == 'PUP':
+                pet_stats = {}
+                entry['upgrades'] += pet_upgrades(loaded, job, js, bags, items, targets=tg, stats=pet_stats)
+                entry['pet_judged'] = pet_stats.get('judged', [])
             entry['judged'] = ws_stats.get('judged', []) + tp_stats.get('judged', [])
             entry['idle_judged'] = idle_stats.get('judged', [])
             entry['sub'] = js

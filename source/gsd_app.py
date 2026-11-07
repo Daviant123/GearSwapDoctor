@@ -35,26 +35,32 @@ from tkinter import filedialog, messagebox, ttk
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import paths    # noqa: E402
+import pld      # noqa: E402
+import pup      # noqa: E402
+import real_fights  # noqa: E402
 import rema     # noqa: E402
 import checks   # noqa: E402
 import doctor   # noqa: E402
 import features  # noqa: E402
 import fixer    # noqa: E402
 import gs_loader  # noqa: E402
+import gs_create  # noqa: E402
 import healing  # noqa: E402
+import magic  # noqa: E402
 import idle     # noqa: E402
+import job_rules  # noqa: E402
 import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.10.0'
+VERSION = '2.17.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
 KIND_TEXT = {'broken': 'Broken', 'unknown': 'Misspelled', 'slot': 'Wrong slot', 'job': 'Wrong job',
-             'missing': 'Not owned', 'stored': 'In storage'}
+             'missing': 'Not owned', 'stored': 'In storage', 'ammo': 'Takes your gun off'}
 KIND_COLOR = {'broken': '#f4b4b4', 'unknown': '#f4b4b4', 'slot': '#f7d79a', 'job': '#f7d79a', 'missing': '#d9d9f7',
-              'stored': '#d9e9f7'}
+              'stored': '#d9e9f7', 'ammo': '#f4b4b4'}
 GRID = [['main', 'sub', 'range', 'ammo'], ['head', 'neck', 'ear1', 'ear2'], ['body', 'hands', 'ring1', 'ring2'],
         ['back', 'waist', 'legs', 'feet']]
 SLOT_TEXT = {'main': 'Main', 'sub': 'Sub', 'range': 'Range', 'ammo': 'Ammo', 'head': 'Head', 'neck': 'Neck', 'ear1': 'Ear 1',
@@ -68,11 +74,13 @@ WPN_AUTO = '(as in the file)'
 
 # How much each kind matters, and what it means / what to do, in plain words (his request 2026-10-30: "gearswap doctor
 # gui is not very user friendly and hard to understand. add in more things to help the user make decisions")
-KIND_LEVEL = {'broken': 'must', 'unknown': 'must', 'slot': 'should', 'job': 'should', 'stored': 'should', 'missing': 'info'}
+KIND_LEVEL = {'broken': 'must', 'unknown': 'must', 'slot': 'should', 'job': 'should', 'stored': 'should', 'missing': 'info', 'ammo': 'must'}
 LEVEL_TEXT = {'must': 'Must fix', 'should': 'Should fix', 'info': 'Just so you know'}
 LEVEL_COLOR = {'must': '#d9534f', 'should': '#e0a030', 'info': '#9a9a9a', 'good': '#4caf50'}
 LEVEL_RANK = {'must': 0, 'should': 1, 'info': 2}
 KIND_HELP = {
+    'ammo': ("A COR or RNG with ammo that isn't a bullet or arrow loses the gun or bow every time that set goes on.",
+             'Ammo that is not a bullet or arrow: your gun comes off when this set goes on. Tick it to put a bullet back.'),
     'broken': ("This set or file doesn't work. GearSwap stops reading the file there, or the set is used before it's made, "
                "so the gear in it is never worn.",
                "Open the file at the line shown in Details (or ask for help with it). This one can't be fixed with a click."),
@@ -115,6 +123,9 @@ class ToolTip:
             self.tip = None
 
 
+HP_ORDER_HELP = ("When a set comes on, GearSwap changes the pieces one after another. If an HP piece comes off before the new HP pieces are on, your max HP dips "
+                 "and your HP is cut to it - and it doesn't come back when the max goes up again (the FFXIAH PLD guide). GearSwap puts on the pieces with the highest "
+                 "\"priority\" first: this gives each piece its own HP as its priority, so HP pieces go on first. Only the order changes, not the gear.")
 BIG_GAIN_NOTE = "Gains this big usually mean the set you have now names gear you don't own, so wsdist counts those slots as empty - check the swaps before applying."
 
 
@@ -124,7 +135,7 @@ def nowbest(u):
         return f"{u['now']} s -> {u['best']} s to a WS"
     if u.get('unit') == 'dps':
         return f"{u['now']:.0f} -> {u['best']:.0f} damage a second"
-    if u.get('kind') == 'idle':
+    if u.get('kind') in ('idle', 'pet', 'pld'):
         return f"{u['now_text']}  ->  {u['best_text']}"
     return f"{u['now']} -> {u['best']}"
 
@@ -133,8 +144,10 @@ def gain_words(u):
     """What the gain is: 'average damage for Savage Blade' / 'faster to a weapon skill (TP set engaged.Acc)'."""
     if u.get('kind') == 'tp':
         return {'s': 'faster to a weapon skill', 'dps': 'more damage a second, weapon skills included'}.get(u.get('unit'), 'more damage per attack round') + f" with {u['ws'][4:]}"
-    if u.get('kind') == 'idle':
+    if u.get('kind') in ('idle', 'pet', 'pld'):
         return f"better for what it's for ({u['ws']})"
+    if u.get('kind') == 'magic':
+        return f"more damage a cast ({u['ws'][len('Magic: '):]})"
     return f"average damage for {u['ws']}"
 
 
@@ -201,6 +214,9 @@ GUIDE = """How to use GearSwap Doctor
    a Moonshade swap at high TP, Warp / experience ring commands, and more. ★ marks the ones suggested for that job
    and your gear. Tick them, pick the options (your gear is in the lists), then "Add ticked features to this file".
    Your own rules stay as they are: the features run after them. In game: //gs c gsd help.
+
+Nuke sets (black, scholar, blue magic): judged by the damage of one cast of their spell, from wsdist's spell maths. A burst set is
+   judged as a magic burst, a Scholar's with its storm and Klimaform. In Build a set, pick the spell and tick Magic burst.
 
 Words
   Set        a group of gear GearSwap puts on for something, e.g. sets.precast.WS["Savage Blade"]
@@ -408,6 +424,7 @@ class App(tk.Tk):
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
         self._start_tab()
         self._features_tab()
+        self._create_tab()
         self._healing_tab()
         self._overview_tab()
         self._problems_tab()
@@ -440,7 +457,7 @@ class App(tk.Tk):
         self.show_last()
         self.show_ws()
         self.after(300, self._first_start)
-        self.after(2000, self.daily)
+        self.after(2000, lambda: self.daily(opening=True))
 
     def _first_start(self):
         if not paths.WINDOWER and not ask_windower(self):
@@ -606,7 +623,7 @@ class App(tk.Tk):
         b1.pack(side='right', padx=6)
         ttk.Button(b1, text='Fix ticked names', command=lambda: self.do_job_part(self.cur_job, 'fix')).pack()
 
-        s2 = section('2. Upgrades - better weapon skill sets and TP sets from gear you already own (wsdist)')
+        s2 = section('2. Upgrades - better sets from gear you already own (wsdist for damage; a PLD\'s tank sets: the FFXIAH PLD guide)')
         self.jt_up = ttk.Treeview(s2, columns=('gain', 'worth', 'items', 'dmg'), show='tree headings', height=6)
         self.jt_up.heading('#0', text='Weapon skill / TP set')
         self.jt_up.column('#0', width=220)
@@ -622,10 +639,31 @@ class App(tk.Tk):
         b2.pack(side='right', padx=6)
         ttk.Button(b2, text='Apply ticked upgrades', command=lambda: self.do_job_part(self.cur_job, 'up')).pack(fill='x')
         ttk.Button(b2, text='See in the gear grid', command=self._job_up_grid).pack(fill='x', pady=(4, 0))
-        bdt = ttk.Button(b2, text='Set its damage taken...', command=self._job_up_dt)
+        bdt = ttk.Button(b2, text='Open in Build a set...', command=self._job_up_dt)
         bdt.pack(fill='x', pady=(4, 0))
-        ToolTip(bdt, 'Opens Build a set with this set picked: type how much damage taken, physical and magic damage '
-                     'taken it must have, and wsdist builds the best set from your gear that has it.')
+        ToolTip(bdt, 'Opens Build a set with this set picked, to look at it in the gear grid and try other numbers.')
+        # his request 2026-11-06: the numbers a set must have, right here
+        prm = ttk.Frame(self.job_frame)
+        prm.pack(fill='x', pady=(2, 2))
+        ttk.Label(prm, text='A set must have:').pack(side='left')
+        self.jp_set = ttk.Combobox(prm, values=[], state='readonly', width=28)
+        self.jp_set.pack(side='left', padx=(4, 8))
+        self.jp_set.bind('<<ComboboxSelected>>', lambda e: self._jp_load())
+        self.jp_vals = {}
+        for k, label, top, tip in (('dt', 'DT', 50, 'Damage taken: counts for physical and magic.'), ('pdt', 'Physical', 50, 'Physical damage taken.'),
+                                   ('mdt', 'Magic', 50, 'Magic damage taken.'),
+                                   ('sird', 'Interruption down', 102, 'Spell interruption rate down, with 5/5 merits (10 %): 102 = a spell is never cut off. For a PLD\'s sets.')):
+            lb = ttk.Label(prm, text=label)
+            lb.pack(side='left')
+            ToolTip(lb, tip)
+            v = tk.IntVar(value=0)
+            ttk.Spinbox(prm, from_=0, to=top, increment=1, textvariable=v, width=3).pack(side='left', padx=(2, 0))
+            ttk.Label(prm, text='%').pack(side='left', padx=(1, 6))
+            self.jp_vals[k] = v
+        ttk.Button(prm, text='Save, re-plan', command=self._jp_save).pack(side='left')
+        ttk.Button(prm, text='Clear', command=lambda: self._jp_save(clear=True)).pack(side='left', padx=(4, 0))
+        self.jp_status = ttk.Label(self.job_frame, text='', foreground='#555', wraplength=900, justify='left')
+        self.jp_status.pack(fill='x')
         self.jt_up_text = self._textbox(self.job_frame, 6)
         self.jt_up_text.pack(fill='x')
 
@@ -724,6 +762,11 @@ class App(tk.Tk):
                     row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}", values=(p['fix'], len(p['sets'])))
                     self.job_rowkey[('fix', row)] = (key, (f['path'], ('rename', p['item'], p['fix'])))
                     n_fix += 1
+                elif p['kind'] == 'ammo' and p.get('fix'):
+                    key = ('a', f['path'], p['item'])
+                    row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}: takes your gun off", values=(p['fix'], len(p['sets'])))
+                    self.job_rowkey[('fix', row)] = (key, (f['path'], ('slots', p['sets'][0], {'ammo': p['fix']})))
+                    n_fix += 1
                 elif p['kind'] == 'missing':
                     n_missing += 1
                 else:
@@ -752,6 +795,7 @@ class App(tk.Tk):
                                      "nothing to do." if n_missing else "Every item in these sets is one you own.")
         checked = '  '.join(t for t in (doctor.tp_checked_text(f) for f in files) if t)
         self._say(self.jt_up_text, ('Click an upgrade to see exactly what it swaps.  ' if n_up else '') + checked)
+        self._jp_fill(files)
         self.job_feat.config(text=self._job_feature_text(job, files))
 
     def _job_feature_text(self, job, files):
@@ -771,6 +815,9 @@ class App(tk.Tk):
         if sug:
             out.append('★ Suggested: ' + ', '.join(f"{features.BY_KEY[k]['title']} ({v})" for k, v in list(sug.items())[:4])
                        + (f' and {len(sug) - 4} more' if len(sug) > 4 else '') + '.')
+        real = real_fights.summary(self.who.get(), os.path.dirname(path), job)
+        if real:
+            out.append(real)
         am = features.am_sets([x['path'] for x in self.loaded_file(path).sets])
         if am:
             out.append(features.am_words([x['path'] for x in self.loaded_file(path).sets]))
@@ -791,12 +838,104 @@ class App(tk.Tk):
         txt = t.item(row, 'text')
         t.item(row, text=self._box(key) + txt[1:])
 
+    # ---- the numbers a set must have, on the job page ----
+    def _jp_fill(self, files):
+        """Every set of this job's files the Doctor judges, plainest first: 'MyChar_Pld_Gear.lua: sets.Enmity'."""
+        self.jp_map = {}
+        for f in files:
+            try:
+                ld = self.loaded_file(f['path'])
+                names = self._sim_sets(ld)
+            except Exception:
+                continue
+            for p in names:
+                label = (f"{f['file']}: " if len(files) > 1 else '') + p
+                self.jp_map[label] = (f['path'], p)
+        self.jp_set.configure(values=list(self.jp_map))
+        if self.jp_set.get() not in self.jp_map:
+            self.jp_set.set('')
+            for v in self.jp_vals.values():
+                v.set(0)
+        self.jp_status.config(text='Pick a set (or click an upgrade above), type what it must have, then Save: a PLD\'s tank sets and idle sets are planned again '
+                                   'at once; weapon skill and TP sets at the next Check now. 0 = no limit.')
+
+    def _jp_pick(self, path, set_path):
+        for label, (p, sp) in self.jp_map.items():
+            if p == path and sp == set_path:
+                self.jp_set.set(label)
+                self._jp_load()
+                return
+
+    def _jp_load(self):
+        pick = self.jp_map.get(self.jp_set.get())
+        if not pick:
+            return
+        t = self.dt_target(*pick) or {}
+        for k, v in self.jp_vals.items():
+            v.set(int(t.get(k) or 0))
+
+    def _jp_save(self, clear=False):
+        pick = self.jp_map.get(self.jp_set.get())
+        if not pick:
+            self.jp_status.config(text='Pick a set first.')
+            return
+        path, set_path = pick
+        t = {}
+        if not clear:
+            for k, v in self.jp_vals.items():
+                try:
+                    t[k] = max(0, min(102 if k == 'sird' else 50, int(v.get())))
+                except (tk.TclError, ValueError):
+                    t[k] = 0
+            old = self.dt_target(path, set_path) or {}
+            t.update({k: old[k] for k in ('main', 'sub') if old.get(k)})
+        else:
+            for v in self.jp_vals.values():
+                v.set(0)
+        self.set_dt_target(path, set_path, t or None)
+        target = self.dt_target(path, set_path) or {}
+        job = checks.job_of(path)
+        sub = self.cfg['subs'].get(job, 'WAR')
+        self.jp_status.config(text=f'Planning {set_path} again ...')
+
+        def work():
+            try:
+                ups = doctor.replan(self.who.get(), path, set_path, sub, target)
+                self.after(0, lambda: self._jp_done(path, set_path, ups))
+            except Exception as e:
+                self.after(0, lambda e=e: self.jp_status.config(text=f'Could not plan it: {e}'))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _jp_done(self, path, set_path, ups):
+        if ups is None:
+            self.jp_status.config(text=f'Saved for {set_path}. It\'s a set wsdist judges: the next Check now uses your numbers (or open it in Build a set now).')
+            return
+        r = self.report or {}
+        for f in r.get('files', []):
+            if f['path'] == path:
+                f['upgrades'] = [u for u in f['upgrades'] if u.get('set') != set_path] + ups
+        try:
+            json.dump(r, open(os.path.join(doctor.DATA, f"report_{self.who.get()}.json"), 'w', encoding='utf-8'), indent=1)
+        except OSError:
+            pass
+        keep = self.jp_set.get()
+        self.fill_job_page()
+        self.jp_set.set(keep)
+        self._jp_load()
+        if ups:
+            u = ups[0]
+            self.jp_status.config(text=f"{set_path}: {u['best_text']}" + (f"  ({u['notes'][-1]})" if u['notes'] and 'short of' in u['notes'][-1] else '')
+                                  + '. It is in the list above, ticked when you tick it.')
+        else:
+            self.jp_status.config(text=f'{set_path}: your set already has the best your gear can do with these numbers.')
+
     def _job_up_detail(self):
         sel = self.jt_up.selection()
         rec = self.job_rowkey.get(('up', sel[0])) if sel else None
         if not rec:
             return
         key, (path, edit), u = rec
+        self._jp_pick(path, u['set'])
         now = self.set_gear(path, u['set'])
         where = self.item_bags()
         lines = [f"{verdict_u(u)}: {gain_text(u)} {gain_words(u)} ({nowbest(u)})  -  "
@@ -840,6 +979,8 @@ class App(tk.Tk):
                 for p in f['problems']:
                     if p['kind'] == 'unknown' and p.get('fix') and ('r', f['path'], p['item']) in self.job_ticks:
                         by_file.setdefault(f['path'], []).append(('rename', p['item'], p['fix']))
+                    if p['kind'] == 'ammo' and p.get('fix') and ('a', f['path'], p['item']) in self.job_ticks:
+                        by_file.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}) for s in p['sets'])
             if part in (None, 'up'):
                 for u in f['upgrades']:
                     if 'error' not in u and ('u', f['path'], u['set']) in self.job_ticks:
@@ -923,6 +1064,21 @@ class App(tk.Tk):
             self._card('must', f"{len(by['broken'])} set(s) or file(s) don't work in game", KIND_HELP['broken'][0] + ' In: '
                        + ', '.join(files[:6]) + (' ...' if len(files) > 6 else ''), [('Show me', lambda: self.show_problems('broken'))])
         # 2. misspelled
+        if by.get('ammo'):
+            def fix_ammo(found=by['ammo']):
+                edits = {}
+                for f, p in found:
+                    if p.get('fix'):
+                        edits.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}) for s in p['sets'])
+                self._apply(edits)
+            n_sets = sum(len(p['sets']) for f, p in by['ammo'])
+            self._card('must', f"{n_sets} set(s) take your gun off", KIND_HELP['ammo'][0], [('Put bullets back', fix_ammo)])
+        order = [(f, f['hp_order']) for f in r['files'] if f.get('hp_order')]
+        if order:
+            def fix_order(found=order):
+                self._apply({f['path']: [('priority', sp, pr) for sp, pr in o.items()] for f, o in found})
+            n_sets = sum(len(o) for f, o in order)
+            self._card('should', f"{n_sets} Paladin set(s) can lose HP as they go on", HP_ORDER_HELP, [('Put HP gear on first', fix_order)])
         fixable = [(f, p) for f, p in by.get('unknown', []) if p.get('fix')]
         if by.get('unknown'):
             ex = ', '.join(f"{p['item']} -> {p['fix']}" for f, p in fixable[:3])
@@ -1884,6 +2040,303 @@ class App(tk.Tk):
         if self._apply({self._heal_path: [('add', rec['path'], new_path, dict(r['gear']))]}) is not False:
             self._heal_after_apply()
 
+    # ------------------------------------------------------------------ Create a GearSwap
+    # His request 2026-10-31: "add a create gearswap ... that will create a brand new gearswap if one does not exist with recommended sets based on current inventory.
+    # make sure its a new tab and a full suite". gs_create.py has the plan and the file; this is the job, the weapons, the sets, the features, the result, the file.
+    def _create_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.nb.add(tab, text='★ Create GearSwap')
+        self.tab_create = tab
+        ttk.Label(tab, text="Makes a brand new GearSwap file for a job that doesn't have one, with recommended sets built from the gear in this character's bags. "
+                            "It never changes a file you already have. Pick the job, untick what you don't want, build, look, then create.",
+                  wraplength=1100, justify='left').pack(anchor='w', pady=(0, 6))
+        top = ttk.LabelFrame(tab, text='1. The job', padding=6)
+        top.pack(fill='x')
+        ttk.Label(top, text='Job').pack(side='left')
+        self.cr_job = ttk.Combobox(top, values=gs_create.ALL_JOBS, state='readonly', width=6)
+        self.cr_job.pack(side='left', padx=(4, 12))
+        self.cr_job.bind('<<ComboboxSelected>>', lambda e: self.cr_load())
+        ttk.Label(top, text='Sub job').pack(side='left')
+        self.cr_sub = ttk.Combobox(top, values=['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU', 'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN'], state='readonly', width=6)
+        self.cr_sub.set('WAR')
+        self.cr_sub.pack(side='left', padx=(4, 12))
+        self.cr_sub.bind('<<ComboboxSelected>>', lambda e: self.cr_load())
+        ttk.Label(top, text='Kind of file').pack(side='left')
+        self.cr_style = ttk.Combobox(top, values=['Standalone', 'Mote'], state='readonly', width=11)
+        self.cr_style.set('Standalone')
+        self.cr_style.pack(side='left', padx=(4, 4))
+        ToolTip(self.cr_style, "Standalone: all the rules are in the file, nothing else needed; F9 fight mode, F10 idle mode.\nMote: uses Mote-Include, which comes with GearSwap and is what most shared files build on; its usual keys and modes.")
+        ttk.Button(top, text='Jobs without a file', command=self.cr_missing).pack(side='left', padx=12)
+        self.cr_note = ttk.Label(top, text='', foreground='#b36b00', wraplength=620, justify='left')
+        self.cr_note.pack(side='left', padx=6)
+        mid = ttk.Frame(tab)
+        mid.pack(fill='both', expand=True, pady=6)
+        left = ttk.Frame(mid)
+        left.pack(side='left', fill='both')
+        wf = ttk.LabelFrame(left, text='2. Weapons (the first is what the sets are judged with; the others go in the file to swap to)', padding=4)
+        wf.pack(fill='x')
+        self.cr_weapons = ttk.Treeview(wf, columns=('sub',), show='tree headings', height=5, selectmode='browse')
+        self.cr_weapons.heading('#0', text='Main hand')
+        self.cr_weapons.heading('sub', text='Sub')
+        self.cr_weapons.column('#0', width=250)
+        self.cr_weapons.column('sub', width=170)
+        self.cr_weapons.pack(fill='x')
+        self.cr_weapons.bind('<Button-1>', self._cr_click)
+        sf = ttk.LabelFrame(left, text='3. The sets (click a box to leave one out)', padding=4)
+        sf.pack(fill='both', expand=True, pady=(4, 0))
+        self.cr_sets = ttk.Treeview(sf, columns=('what',), show='tree headings', height=14, selectmode='browse')
+        self.cr_sets.heading('#0', text='Set')
+        self.cr_sets.heading('what', text='For')
+        self.cr_sets.column('#0', width=250)
+        self.cr_sets.column('what', width=210)
+        self.cr_sets.tag_configure('group', font=('Segoe UI', 9, 'bold'))
+        sb = ttk.Scrollbar(sf, orient='vertical', command=self.cr_sets.yview)
+        self.cr_sets.configure(yscrollcommand=sb.set)
+        self.cr_sets.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        self.cr_sets.bind('<Button-1>', self._cr_click)
+        ff = ttk.LabelFrame(left, text='4. Add features too', padding=4)
+        ff.pack(fill='x', pady=(4, 0))
+        self.cr_feat = {}
+        for i, key in enumerate(('doom', 'obi', 'haste', 'aftermath', 'fights', 'th')):
+            v = tk.BooleanVar(value=key in ('doom', 'haste', 'fights'))
+            ttk.Checkbutton(ff, text=features.BY_KEY[key]['title'], variable=v).grid(row=i // 2, column=i % 2, sticky='w', padx=(0, 10))
+            self.cr_feat[key] = v
+        right = ttk.Frame(mid)
+        right.pack(side='left', fill='both', expand=True, padx=(8, 0))
+        bar = ttk.Frame(right)
+        bar.pack(fill='x')
+        self.cr_build_btn = ttk.Button(bar, text='5. Build the sets from my gear', style='Big.TButton', command=self.cr_build)
+        self.cr_build_btn.pack(side='left')
+        self.cr_create_btn = ttk.Button(bar, text='6. Create the file', style='Big.TButton', command=self.cr_create, state='disabled')
+        self.cr_create_btn.pack(side='left', padx=8)
+        self.cr_status = ttk.Label(bar, text='', wraplength=600, justify='left')
+        self.cr_status.pack(side='left', padx=6)
+        pw = ttk.Notebook(right)
+        pw.pack(fill='both', expand=True, pady=(6, 0))
+        p1 = ttk.Frame(pw, padding=4)
+        pw.add(p1, text='The sets')
+        self.cr_result = ttk.Treeview(p1, columns=('note',), show='tree headings', height=9, selectmode='browse')
+        self.cr_result.heading('#0', text='Set')
+        self.cr_result.heading('note', text='What it has')
+        self.cr_result.column('#0', width=240)
+        self.cr_result.column('note', width=520)
+        self.cr_result.pack(fill='x')
+        self.cr_result.bind('<<TreeviewSelect>>', lambda e: self._cr_show())
+        self.cr_grid = GearGrid(p1, 'The set', lambda: self.items)
+        self.cr_grid.pack(fill='both', expand=True, pady=(6, 0))
+        p2 = ttk.Frame(pw, padding=4)
+        pw.add(p2, text='The file')
+        self.cr_text = tk.Text(p2, wrap='none', font=MONO)
+        ys = ttk.Scrollbar(p2, orient='vertical', command=self.cr_text.yview)
+        self.cr_text.configure(yscrollcommand=ys.set)
+        ys.pack(side='right', fill='y')
+        self.cr_text.pack(side='left', fill='both', expand=True)
+        self.cr_built = {}
+        self.cr_off = set()
+        self.cr_recs = {}
+        self.cr_weapon_rows = {}
+
+    def _cr_folder(self):
+        return doctor.GS_DATA
+
+    def _cr_ids(self):
+        bags = checks.load_bags(self.who.get()) or {}
+        ids, counts = set(), {}
+        for b, c in bags.items():
+            if not b.startswith('_') and b in checks.EQUIP_BAGS:
+                ids |= set(c)
+        return ids, bags
+
+    def cr_missing(self):
+        have = {checks.job_of(p) for p in doctor.files_for(self.who.get(), self._cr_folder())}
+        none = [j for j in gs_create.ALL_JOBS if j not in have]
+        messagebox.showinfo('GearSwap Doctor', f"{self.who.get()} has no GearSwap file for: {', '.join(none) or 'nothing: every job has one'}.")
+
+    def cr_load(self):
+        """The job or sub job changed: what he has, the weapons to use, the sets to make."""
+        job, sub = self.cr_job.get(), self.cr_sub.get()
+        if not job:
+            return
+        if sub == job:                                       # (a job can't sub itself)
+            sub = 'SAM' if job == 'WAR' else 'WAR'
+            self.cr_sub.set(sub)
+        who = self.who.get()
+        self.cr_built = {}
+        self.cr_create_btn.config(state='disabled')
+        self.cr_text.delete('1.0', 'end')
+        self.cr_result.delete(*self.cr_result.get_children())
+        self.cr_grid.show({})
+        have = gs_create.existing(who, job, self._cr_folder())
+        self.cr_exists = have
+        self.cr_note.config(text=(f"{who} already has {', '.join(os.path.basename(p) for p in have)} for {job}: this won't change it. Use Build a set and Jobs on that one." if have else ''))
+        self.cr_build_btn.config(state='disabled' if have else 'normal')
+        ids, _bags = self._cr_ids()
+        if not self.ws_ready:
+            self.cr_status.config(text='wsdist is still loading - pick the job again in a moment.')
+            return
+        index = W.gear_index()
+        items = self.items or checks.Items()
+        entries = gs_create.weapon_entries(ids, items, index, W)
+        weapons = gs_create.owned_weapons(job, entries, index)
+        grips = sorted({e['Name'] for e in entries if e.get('Type') == 'Grip' and job.lower() in e['Jobs']})
+        t = self.cr_weapons
+        t.delete(*t.get_children())
+        self.cr_weapon_rows = {}
+        self.cr_weapon_list = weapons
+        gun, bullet = job_rules.ranged_for(job, entries, items, ids)
+        self.cr_note.config(text=self.cr_note.cget('text') + (f"  {job} keeps {gun}" + (f" with {bullet}" if bullet else '') + " in the file: its ammo slot only takes what goes with it." if gun else ''))
+        for i, e in enumerate(weapons[:12]):
+            row = t.insert('', 'end', text=f"{ON if i < 3 else OFF} {e['Name']}", values=(gs_create.sub_for(e, weapons, job, sub, grips) or '',))
+            self.cr_weapon_rows[row] = {'main': e['Name'], 'sub': gs_create.sub_for(e, weapons, job, sub, grips), 'on': i < 3, 'entry': e, 'range': gun, 'ammo': bullet}
+        self.cr_off = set()
+        self._cr_fill_sets()
+        self.cr_status.config(text='' if weapons or job in gs_create.MAGES else f"No weapon {job} can use in {who}'s bags that wsdist knows.")
+
+    def _cr_fill_sets(self):
+        job, sub = self.cr_job.get(), self.cr_sub.get()
+        ticked = [r['entry'] for r in self.cr_weapon_rows.values() if r['on']]
+        recs = gs_create.plan(job, sub, ticked or [], W)
+        t = self.cr_sets
+        t.delete(*t.get_children())
+        self.cr_recs = {}
+        groups = {}
+        for r in recs:
+            g = groups.get(r['group'])
+            if not g:
+                g = groups[r['group']] = t.insert('', 'end', text=r['group'], open=True, tags=('group',))
+            on = r.get('on', True) and r['path'] not in self.cr_off
+            row = t.insert(g, 'end', text=f"{ON if on else OFF} {r['path'][len('sets.'):]}", values=(r['title'],))
+            self.cr_recs[row] = dict(r, on=on)
+
+    def _cr_click(self, e):
+        t = e.widget
+        row = t.identify_row(e.y)
+        if t is self.cr_weapons and row in self.cr_weapon_rows:
+            rec = self.cr_weapon_rows[row]
+            rec['on'] = not rec['on']
+            t.item(row, text=f"{ON if rec['on'] else OFF} {rec['main']}")
+            self._cr_fill_sets()
+            return 'break'
+        if t is self.cr_sets and row in self.cr_recs:
+            rec = self.cr_recs[row]
+            rec['on'] = not rec['on']
+            (self.cr_off.discard if rec['on'] else self.cr_off.add)(rec['path'])
+            t.item(row, text=f"{ON if rec['on'] else OFF} {rec['path'][len('sets.'):]}")
+            return 'break'
+        return None
+
+    def cr_build(self):
+        job, sub, who = self.cr_job.get(), self.cr_sub.get(), self.who.get()
+        if not job or self.cr_exists:
+            return
+        if not checks.load_bags(who):
+            messagebox.showinfo('GearSwap Doctor', f"No saved bags for {who}: the Doctor needs Steward's or findAll's copy of what they own.")
+            return
+        recs = [r for r in self.cr_recs.values() if r['on']]
+        weapons = [r for r in self.cr_weapon_rows.values() if r['on']]
+        first = weapons[0] if weapons else {}
+        self.cr_build_btn.config(state='disabled')
+        self.progress.config(mode='determinate', value=0, maximum=max(1, len(recs)))
+        buffs = W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), 'auto')
+        enemy = self.cfg.get('enemy', 'Apex Toad')
+
+        def work():
+            try:
+                items = self.items or checks.Items()
+                data = self._heal_data or healing.ItemData()
+                self._heal_data = data
+                self.cr_load_files = [self.loaded_file(p) for p in doctor.files_for(who, self._cr_folder())]
+                ids, bags = self._cr_ids()
+                snap = {b: {items.by_id[i]['en']: n for i, n in c.items() if i in items.by_id} for b, c in bags.items() if not b.startswith('_')}
+                owned = features.owned_items(items, snap, job)
+                cands = healing.candidates(owned, data, healing.known_augments(self.cr_load_files))
+                counts = {}
+                for b, c in snap.items():
+                    if b in checks.EQUIP_BAGS:
+                        for n, k in c.items():
+                            counts[n] = counts.get(n, 0) + k
+                ctx = {'job': job, 'sub': sub, 'main': first.get('main'), 'off': first.get('sub'), 'main_skill': (first.get('entry') or {}).get('Skill Type'), 'cands': cands, 'counts': counts, 'items': items, 'data': data,
+                       'owned_ids': ids, 'index': W.gear_index(), 'buffs': buffs, 'enemy': enemy, 'W': W}
+                built, notes = {}, {}
+                for i, r in enumerate(recs):
+                    self.after(0, lambda i=i, r=r: (self.progress.config(value=i), self.cr_status.config(text=f"Building {i + 1} of {len(recs)}: {r['path']}")))
+                    try:
+                        gear, note = gs_create.build_one(r, ctx)
+                    except Exception as e:
+                        gear, note = {}, f'could not build it: {e}'
+                    notes[r['path']] = note
+                    if gear:
+                        built[r['path']] = gear
+                # gear that names one of the job's abilities (Souleater, Blood Weapon...)
+                for name, g in gs_create.ability_sets(cands, data, gs_create.ability_names(os.path.join(checks.WINDOWER, 'res')), items, job).items():
+                    p = f'sets.precast.JA["{name}"]'
+                    if p in built:                                  # (a PLD's: already the enmity set with that piece)
+                        continue
+                    built[p] = {s: healing.gs_name(c) for s, c in g.items()}
+                    notes[p] = 'gear that names this ability'
+                self.after(0, lambda: self._cr_built(built, notes, weapons))
+            except Exception as e:
+                self.after(0, lambda e=e: self._cr_failed(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _cr_failed(self, e):
+        self.progress.config(value=0)
+        self.cr_build_btn.config(state='normal')
+        self.cr_status.config(text=f'It could not build them: {e}')
+
+    def _cr_built(self, built, notes, weapons):
+        import datetime
+        self.progress.config(value=0)
+        self.cr_build_btn.config(state='normal')
+        self.cr_built = built
+        t = self.cr_result
+        t.delete(*t.get_children())
+        self.cr_rows = {}
+        for p in sorted(notes, key=lambda x: x):
+            row = t.insert('', 'end', text=p[len('sets.'):], values=(notes[p],))
+            self.cr_rows[row] = p
+        name, job = self.who.get(), self.cr_job.get()
+        self.cr_file_text = gs_create.render(name, job, self.cr_style.get(), built, [{'main': w['main'], 'sub': w.get('sub'), 'range': w.get('range'), 'ammo': w.get('ammo')} for w in weapons], VERSION, datetime.date.today().isoformat(),
+                                             sub=self.cr_sub.get())
+        self.cr_text.delete('1.0', 'end')
+        self.cr_text.insert('1.0', self.cr_file_text)
+        empty = [p for p in notes if p not in built]
+        self.cr_status.config(text=f"{len(built)} sets ready" + (f", {len(empty)} empty (no gear for them)" if empty else '') + '. Look them over, then create the file.')
+        self.cr_create_btn.config(state='normal' if built else 'disabled')
+        kids = t.get_children()
+        if kids:
+            t.selection_set(kids[0])
+
+    def _cr_show(self):
+        sel = self.cr_result.selection()
+        p = self.cr_rows.get(sel[0]) if sel else None
+        gear = self.cr_built.get(p) or {}
+        self.cr_grid.show({s: (v['name'] if isinstance(v, dict) else v) for s, v in gear.items()})
+
+    def cr_create(self):
+        name, job = self.who.get(), self.cr_job.get()
+        path = gs_create.path_for(name, job, self._cr_folder())
+        if gs_create.existing(name, job, self._cr_folder()) or os.path.exists(path):
+            messagebox.showinfo('GearSwap Doctor', f'{name} has a file for {job} now: nothing was written.')
+            return
+        if not getattr(self, 'auto_confirm', False) and not messagebox.askyesno('GearSwap Doctor', f'Create {os.path.basename(path)} with {len(self.cr_built)} sets?\n\nNo other file is changed.'):
+            return
+        try:
+            gs_create.write(path, self.cr_file_text)
+            on = {k: dict(features.defaults(features.BY_KEY[k], self.feat_owned(job), [s for s in self.cr_built]), on=True) for k, v in self.cr_feat.items() if v.get()}
+            if on:
+                features.apply(path, on)
+        except Exception as e:
+            messagebox.showerror('GearSwap Doctor', f'Not created: {e}')
+            return
+        self.loaded.clear()
+        self.cr_status.config(text=f'Created {os.path.basename(path)}. In game, change to {job} (or //gs load {os.path.basename(path)[:-4]}). Build a set and Jobs now work on it.')
+        self.cr_create_btn.config(state='disabled')
+        self.cr_load()
+        if not getattr(self, 'auto_confirm', False):
+            self.run_check(quiet=True)
+
     # ------------------------------------------------------------------ Overview
     def _overview_tab(self):
         tab = ttk.Frame(self.nb, padding=8)
@@ -2204,6 +2657,30 @@ class App(tk.Tk):
         self.sim_am.grid(row=4, column=3, sticky='w', padx=4)
         ToolTip(lb, AM_HELP)
         ToolTip(self.sim_am, AM_HELP)
+        # a nuke set (his request 2026-11-07: black, scholar and blue magic): the spell and what goes with it
+        lb = ttk.Label(inp, text='Spell')
+        lb.grid(row=5, column=0, sticky='w')
+        ToolTip(lb, 'Nuke sets (black, scholar and blue magic): the spell wsdist judges the set by. It starts from the set\'s name.')
+        self.sim_spell = ttk.Combobox(inp, width=30, state='disabled', values=[])
+        self.sim_spell.grid(row=5, column=1, sticky='w', padx=4, pady=2)
+        self.sim_spell.bind('<<ComboboxSelected>>', lambda e: self._sim_spell_changed())
+        mf = ttk.Frame(inp)
+        mf.grid(row=5, column=2, columnspan=2, sticky='w', padx=(16, 0))
+        self.sim_burst = tk.BooleanVar(value=False)
+        self.sim_burst_btn = ttk.Checkbutton(mf, text='Magic burst', variable=self.sim_burst, state='disabled')
+        self.sim_burst_btn.pack(side='left')
+        ToolTip(self.sim_burst_btn, 'The spell lands in a skillchain\'s burst window: magic burst damage gear counts (up to +40 %, '
+                                    'Magic burst damage II on top).')
+        self.sim_storm = ttk.Combobox(mf, width=15, state='disabled', values=magic.STORMS)
+        self.sim_storm.set('None')
+        self.sim_storm.pack(side='left', padx=(8, 0))
+        ToolTip(self.sim_storm, "A Scholar's storm on you: a Hachirin-no-Obi then gets the weather bonus.")
+        self.sim_ebul = tk.BooleanVar(value=False)
+        self.sim_ebul_btn = ttk.Checkbutton(mf, text='Ebullience', variable=self.sim_ebul, state='disabled')
+        self.sim_ebul_btn.pack(side='left', padx=(8, 0))
+        self.sim_klima = tk.BooleanVar(value=False)
+        self.sim_klima_btn = ttk.Checkbutton(mf, text='Klimaform', variable=self.sim_klima, state='disabled')
+        self.sim_klima_btn.pack(side='left', padx=(4, 0))
 
         dtf = ttk.LabelFrame(top, text='2. Damage taken it must have (% less damage)', padding=8)
         dtf.pack(side='left', fill='both', padx=(8, 0))
@@ -2211,27 +2688,28 @@ class App(tk.Tk):
         for i, (k, label, tip) in enumerate((
                 ('dt', 'Damage taken (DT)', 'Counts for both physical and magic damage, like DT gear does.'),
                 ('pdt', 'Physical damage taken (PDT)', 'From weapons and physical TP moves.'),
-                ('mdt', 'Magic damage taken (MDT)', 'From spells and magic TP moves.'))):
+                ('mdt', 'Magic damage taken (MDT)', 'From spells and magic TP moves.'),
+                ('sird', 'Spell interruption down', 'A PLD\'s sets: how much less often a spell is cut off while you\'re hit, with 5/5 merits (10 %). 102 = never.'))):
             lb = ttk.Label(dtf, text=label)
             lb.grid(row=i, column=0, sticky='w')
             ToolTip(lb, tip)
             v = tk.IntVar(value=0)
-            ttk.Spinbox(dtf, from_=0, to=50, increment=1, textvariable=v, width=5).grid(row=i, column=1, sticky='w', padx=4, pady=1)
+            ttk.Spinbox(dtf, from_=0, to=102 if k == 'sird' else 50, increment=1, textvariable=v, width=5).grid(row=i, column=1, sticky='w', padx=4, pady=1)
             ttk.Label(dtf, text='%').grid(row=i, column=2, sticky='w')
             self.sim_dt[k] = v
         self.sim_dt_hint = ttk.Label(dtf, text='', foreground='#666', wraplength=300, justify='left')
-        self.sim_dt_hint.grid(row=3, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        self.sim_dt_hint.grid(row=4, column=0, columnspan=3, sticky='w', pady=(4, 0))
         self.sim_remember = tk.BooleanVar(value=True)
         ttk.Checkbutton(dtf, text='Remember for this set (the check-ups use it too)', variable=self.sim_remember).grid(
-            row=4, column=0, columnspan=3, sticky='w', pady=(4, 0))
-        lb = ttk.Label(dtf, text='An idle set is for')
-        lb.grid(row=5, column=0, sticky='w', pady=(4, 0))
+            row=5, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        lb = ttk.Label(dtf, text='Idle / automaton set is for')
+        lb.grid(row=6, column=0, sticky='w', pady=(4, 0))
         ToolTip(lb, 'Idle and defense sets: what counts most after your damage taken. It starts from the set\'s name: Refresh, Town, PDT, MEVA...')
         self.sim_focus = ttk.Combobox(dtf, values=list(idle.FOCUS), state='disabled', width=14)
-        self.sim_focus.grid(row=5, column=1, columnspan=2, sticky='w', pady=(4, 0))
+        self.sim_focus.grid(row=6, column=1, columnspan=2, sticky='w', pady=(4, 0))
         self.sim_shell = tk.BooleanVar(value=False)
         self.sim_shell_btn = ttk.Checkbutton(dtf, text='Idle set: I always have Shell V (21 % magic from gear is enough)', variable=self.sim_shell, state='disabled')
-        self.sim_shell_btn.grid(row=6, column=0, columnspan=3, sticky='w', pady=(2, 0))
+        self.sim_shell_btn.grid(row=7, column=0, columnspan=3, sticky='w', pady=(2, 0))
 
         mine = ttk.LabelFrame(top, text='Damage taken you set', padding=6)
         mine.pack(side='left', fill='both', padx=(8, 0))
@@ -2257,6 +2735,21 @@ class App(tk.Tk):
         self.sim_new_btn.pack(side='left')
         self.sim_status = ttk.Label(btns, text='Loading wsdist ...', wraplength=420, justify='left')
         self.sim_status.pack(side='left', padx=8)
+        # His request 2026-11-01: tick which slots go in, for "Put it in this set" and "Save it as a new set"
+        picks = ttk.Frame(tab)
+        picks.pack(fill='x', pady=(0, 6))
+        lb = ttk.Label(picks, text='Slots to use:')
+        lb.pack(side='left')
+        ToolTip(lb, "Only the ticked slots go in. Put it in this set: an unticked slot keeps what your set has. Save it as a new set: an unticked slot isn't in the new set at all.")
+        self.sim_slots = {}
+        for slot in ('main', 'sub', 'ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet'):
+            v = tk.BooleanVar(value=True)
+            ttk.Checkbutton(picks, text=SLOT_TEXT.get(slot, slot), variable=v, command=self._sim_slots_changed).pack(side='left', padx=(4, 0))
+            self.sim_slots[slot] = v
+        ttk.Button(picks, text='All', width=4, command=lambda: self._sim_all_slots(True)).pack(side='left', padx=(10, 2))
+        ttk.Button(picks, text='None', width=5, command=lambda: self._sim_all_slots(False)).pack(side='left')
+        self.sim_slots_note = ttk.Label(tab, text='', foreground='#b36b00', wraplength=1100, justify='left')
+        self.sim_slots_note.pack(anchor='w')
         res = ttk.LabelFrame(tab, text='Results', padding=8)
         res.pack(fill='both', expand=True)
         self.sim_result = ttk.Label(res, text='', font=('Courier New', 11), justify='left')
@@ -2269,6 +2762,7 @@ class App(tk.Tk):
         self.sim_grid_best.pack(side='left', fill='both', expand=True)
         self.sim_best = None
         self.sim_best_gear = None
+        self._sim_view = None
         self.fill_dt_list()
 
     # the damage taken he set: settings 'dt_targets' = {file name: {set path: {'dt', 'pdt', 'mdt'(, 'main', 'sub')}}}
@@ -2278,8 +2772,13 @@ class App(tk.Tk):
     def set_dt_target(self, path, set_path, t):
         allt = self.cfg.setdefault('dt_targets', {})
         f = allt.setdefault(os.path.basename(path), {})
-        if t and any(t.get(k) for k in ('dt', 'pdt', 'mdt', 'main', 'sub')):
+        if t and any(t.get(k) for k in ('dt', 'pdt', 'mdt', 'sird', 'main', 'sub', 'spell')):
             f[set_path] = {k: int(t.get(k) or 0) for k in ('dt', 'pdt', 'mdt')}
+            if t.get('spell'):                              # (a nuke set: the spell and what goes with it)
+                f[set_path]['spell'] = t['spell']
+                f[set_path]['magic'] = dict(t.get('magic') or {})
+            if t.get('sird'):
+                f[set_path]['sird'] = int(t['sird'])
             for k in ('main', 'sub'):
                 if t.get(k):
                     f[set_path][k] = t[k]
@@ -2299,9 +2798,9 @@ class App(tk.Tk):
             if fname not in mine:
                 continue
             for sp, v in sorted(sets_.items()):
-                wpn = ' / '.join(x for x in (v.get('main'), v.get('sub')) if x)
+                wpn = ' / '.join(x for x in (v.get('main'), v.get('sub'), v.get('spell')) if x)
                 row = t.insert('', 'end', text=f"{fname.split('_', 1)[-1][:-4]}  {sp[5:]}" + (f'  ({wpn})' if wpn else ''),
-                               values=(f"{v.get('dt', 0)} / {v.get('pdt', 0)} / {v.get('mdt', 0)}",))
+                               values=(f"{v.get('dt', 0)} / {v.get('pdt', 0)} / {v.get('mdt', 0)}" + (f" SIRD {v['sird']}" if v.get('sird') else ''),))
                 self._dt_rows[row] = (fname, sp)
 
     def _dt_pick(self):
@@ -2340,7 +2839,13 @@ class App(tk.Tk):
             ws = [p_ for p_ in ws if doctor.ws_of(p_, known)] or ws
         tp = sorted((s['path'] for s in ld.sets if doctor.is_tp_set(s['path'])), key=lambda p_: (p_.count('.'), p_))
         rest = sorted((s['path'] for s in ld.sets if idle.is_idle(s['path'])), key=lambda p_: (p_.count('.'), p_))
-        return ws + tp + rest
+        job = checks.job_of(ld.name)
+        pets = sorted((s['path'] for s in ld.sets if pup.is_pet_set(s['path'], job) and s['path'] not in tp + rest), key=lambda p_: (p_.count('.'), p_))
+        # (a Paladin's enmity, ability, spell and buff sets: pld.py)
+        tank = sorted((s['path'] for s in ld.sets if pld.takes(s['path'], job) and s['path'] not in ws + tp + rest + pets), key=lambda p_: (p_.count('.'), p_))
+        nukes = sorted((s['path'] for s in ld.sets if magic.kind_of(s['path'], job) and s['path'] not in ws + tp + rest + pets + tank),
+                       key=lambda p_: (p_.count('.'), p_))
+        return ws + tp + rest + pets + tank + nukes
 
     def sim_file_changed(self):
         name = self.sim_file.get()
@@ -2350,9 +2855,23 @@ class App(tk.Tk):
         except Exception:
             return
         sets = self._sim_sets(ld)
+        if not sets:
+            # (a job file with only the rules: its sets are in <Name>_<JOB>_gear.lua. His MyAlt_PUP.lua, 2026-10-31: an empty list and a set left from the last file)
+            other = doctor.gear_file(path)
+            if other:
+                names = list(self.sim_file.cget('values'))
+                base = os.path.basename(other)
+                if base not in names:
+                    self.sim_file.configure(values=names + [base])
+                self.sim_file.set(base)
+                self.sim_file_changed()
+                self.sim_status.config(text=f"{name} only has your job's rules: its sets are in {base}, so that's open now.")
+                return
         self.sim_set.configure(values=sets)
         if sets and self.sim_set.get() not in sets:
             self.sim_set.set(sets[0])
+        elif not sets:
+            self.sim_set.set('')
         job = checks.job_of(name)
         if job:
             self.sim_sub.set(self.cfg['subs'].get(job, self.sim_sub.get()))
@@ -2365,6 +2884,7 @@ class App(tk.Tk):
         for k, v in self.sim_dt.items():
             v.set(int(t.get(k) or 0))
         is_tp = doctor.is_tp_set(sp) if sp else False
+        self._sim_magic_setup(sp, t)
         mains, subs = self._weapon_choices(self.sim_file.get(), sp, is_tp)
         self.sim_main.configure(values=[WPN_AUTO] + mains)
         self.sim_subw.configure(values=[WPN_AUTO, doctor.NO_SUB] + subs)
@@ -2372,28 +2892,86 @@ class App(tk.Tk):
         self.sim_subw.set(t.get('sub') or WPN_AUTO)
         self.sim_tp_label.config(text='WS at TP' if is_tp else 'TP')
         self.sim_tp.set(self.cfg.get('ws_tp', 1000) if is_tp else self.cfg['tp'])
-        rest = idle.is_idle(sp)
+        is_pld = pld.takes(sp, checks.job_of(self.sim_file.get() or ''))
+        rest = idle.is_idle(sp) or pup.is_pet_set(sp, checks.job_of(self.sim_file.get() or '')) or is_pld
+        is_pet = pup.is_pet_set(sp, checks.job_of(self.sim_file.get() or ''))
+        # (the last set's results don't stay under this one)
+        if hasattr(self, 'sim_result') and hasattr(self, 'sim_grid_best'):
+            self.sim_result.config(text='')
+            self.sim_status.config(text='')
+            self.sim_grid_now.show({})
+            self.sim_grid_best.show({})
         self.sim_focus.config(state='readonly' if rest else 'disabled')
-        self.sim_focus.set(idle.focus_for(sp) if rest else '')
-        self.sim_shell_btn.config(state='normal' if rest else 'disabled')
-        self.sim_dt_hint.config(text=('An idle set: all 0 = as much as it can get, by what it is for. Enemy, TP, buffs and Aftermath don\'t matter here. ' if rest else
+        self.sim_focus.config(values=list(pld.FOCUS) if is_pld else list(pup.FOCUS) if is_pet else list(idle.FOCUS))
+        self.sim_focus.set(pld.focus_for(sp) if is_pld else pup.focus_for(sp) if is_pet else idle.focus_for(sp) if rest else '')
+        self.sim_shell_btn.config(state='normal' if rest and not is_pet and not is_pld else 'disabled')
+        self.sim_dt_hint.config(text=("A Paladin set: judged by the FFXIAH PLD guide's rules for what it is for (enmity, interruption, Phalanx, HP ...). Enemy, TP, buffs and Aftermath don't matter here. " if is_pld else
+                                      'An automaton set: judged on the Pet: stats of your gear. These numbers are for you, not the pet. Enemy, TP, buffs and Aftermath don\'t matter here. ' if is_pet else
+                                      'An idle set: all 0 = as much as it can get, by what it is for. Enemy, TP, buffs and Aftermath don\'t matter here. ' if rest else
                                       'A TP set: all 0 = keep the damage taken it has now. ' if is_tp else
+                                      'A nuke set: all 0 = no limit (most damage a cast). TP and Aftermath don\'t matter here. '
+                                      if sp and magic.kind_of(sp, checks.job_of(self.sim_file.get() or '') or '') else
                                       'A weapon skill set: all 0 = no limit (most damage). ')
                                 + 'The most is 50 % each. DT counts for both.')
         self.sim_best = None
+        self.sim_best_gear = None
+        self._sim_view = None
+        for v in self.sim_slots.values():                    # (a new set starts with every slot ticked)
+            v.set(True)
+        self.sim_slots_note.config(text='')
         self.sim_apply_btn.config(state='disabled')
         self.sim_new_btn.config(state='disabled')
+
+    def _sim_magic_setup(self, sp, saved):
+        """A nuke set: the spell list, the burst, a Scholar's storm / Ebullience / Klimaform - from what he picked before, else the
+        set's name."""
+        job = checks.job_of(self.sim_file.get() or '') or ''
+        k = magic.kind_of(sp, job) if sp else None
+        on = bool(k) and k[0] in ('nuke', 'blue')
+        self.sim_spell.config(state='readonly' if on else 'disabled', values=magic.spells_for(job) if on else [])
+        for w in (self.sim_burst_btn,):
+            w.config(state='normal' if on else 'disabled')
+        sch = on and job == 'SCH'
+        self.sim_storm.config(state='readonly' if sch else 'disabled')
+        self.sim_ebul_btn.config(state='normal' if sch else 'disabled')
+        self.sim_klima_btn.config(state='normal' if sch else 'disabled')
+        if not on:
+            self.sim_spell.set('')
+            self.sim_burst.set(False)
+            return
+        spell, burst = magic.spell_for(sp, job)
+        spell = saved.get('spell') or spell
+        opts = dict(magic.default_options(job, spell, burst), **(saved.get('magic') or {}))
+        self.sim_spell.set(spell)
+        self.sim_burst.set(opts['burst'])
+        self.sim_storm.set(opts['storm'])
+        self.sim_ebul.set(opts['ebullience'])
+        self.sim_klima.set(opts['klimaform'])
+
+    def _sim_spell_changed(self):
+        job = checks.job_of(self.sim_file.get() or '') or ''
+        if job == 'SCH':
+            o = magic.default_options(job, self.sim_spell.get(), self.sim_burst.get())
+            self.sim_storm.set(o['storm'])
+            self.sim_ebul.set(o['ebullience'])
+
+    def _sim_magic_opts(self):
+        return {'burst': bool(self.sim_burst.get()), 'storm': self.sim_storm.get() or 'None', 'ebullience': bool(self.sim_ebul.get()),
+                'klimaform': bool(self.sim_klima.get())}
 
     def _sim_target(self):
         out = {}
         for k, v in self.sim_dt.items():
             try:
-                out[k] = max(0, min(50, int(v.get())))
+                out[k] = max(0, min(102 if k == 'sird' else 50, int(v.get())))
             except (tk.TclError, ValueError):
                 out[k] = 0
         for k, cb in (('main', self.sim_main), ('sub', self.sim_subw)):
             if cb.get() and cb.get() != WPN_AUTO:
                 out[k] = cb.get()
+        if str(self.sim_spell.cget('state')) != 'disabled' and self.sim_spell.get():
+            out['spell'] = self.sim_spell.get()
+            out['magic'] = self._sim_magic_opts()
         return out
 
     def _weapon_choices(self, fname, set_path, is_tp):
@@ -2428,6 +3006,79 @@ class App(tk.Tk):
             except Exception:
                 pass
         return mains, subs
+
+    def _sim_pet(self, find_best, mod=pup):
+        """An automaton set: judged on its Pet: stats (pup.py), wsdist doesn't read them. mod=pld: a Paladin's set, the same way (pld.py)."""
+        name, set_path = self.sim_file.get(), self.sim_set.get()
+        path = os.path.join(doctor.GS_DATA, name)
+        job, sub = checks.job_of(name), self.sim_sub.get()
+        target = self._sim_target()
+        if find_best and self.sim_remember.get():
+            self.set_dt_target(path, set_path, target)
+        focus = self.sim_focus.get() or None
+        need = {k: target[k] for k in ('dt', 'pdt', 'mdt') if target.get(k)}
+        self.sim_status.config(text='Working it out from your gear ...')
+        self.progress.config(mode='indeterminate'); self.progress.start(12)
+
+        def work():
+            try:
+                ld = self.loaded_file(path)
+                gear = next(s['gear'] for s in ld.sets if s['path'] == set_path)
+                cands, counts = self._heal_cands(job)
+                # (the augments on his Taeon and the like are only known from his files: this one has them)
+                if self._heal_data is not None:
+                    seen = {(c['name'], tuple(c['augments'])) for c in cands}
+                    owned = {c['name'].lower(): c for c in cands}
+                    for lower, variants in healing.known_augments([ld]).items():
+                        base = owned.get(lower)
+                        if base:
+                            for a in variants:
+                                if (base['name'], tuple(a)) not in seen:
+                                    found = (self.items or checks.Items()).find(base['name'])
+                                    cands.append(healing.candidate(found[0], self._heal_data, a))
+                its = self.items or checks.Items()
+                if mod is pld:
+                    r = pld.judge(set_path, gear, job, sub, cands, counts, its, self._heal_data, need=doctor.need_of(target, sird=True), focus=focus, build=find_best, idle_hp=pld.idle_hp(ld, its, self._heal_data, counts))
+                else:
+                    r = pup.judge(set_path, gear, job, sub, cands, counts, its, self._heal_data, need=need, focus=focus, build=find_best)
+                self.after(0, lambda: self._sim_pet_done(path, set_path, r, need, find_best, mod))
+            except Exception as e:
+                self.after(0, lambda e=e: self._sim_failed(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sim_pet_done(self, path, set_path, r, need, find_best, mod=pup):
+        self.progress.stop(); self.progress.config(mode='determinate', value=0)
+        self.sim_status.config(text='   '.join(r['notes']))
+        names = lambda g: {s: c['name'] for s, c in g.items() if c}  # noqa: E731
+        now_gear = names(r['cur'])
+        advice = (lambda n, f: pld.advice(n, f, r.get('idle_hp'))) if mod is pld else pup.advice
+        lines = ['Your set:  ' + mod.words(r['n_now'], r['focus'])]
+        self._sim_last = (path, set_path)
+        if not find_best:
+            tip = advice(r['n_now'], r['focus'])
+            self.sim_result.config(text='\n'.join(lines + ([tip + '.'] if tip else [])))
+            self.sim_grid_now.show(now_gear)
+            self.sim_grid_best.show({})
+            self.sim_best = None
+            self.sim_apply_btn.config(state='disabled')
+            self.sim_new_btn.config(state='disabled')
+            return
+        lines.append('Best:        ' + mod.words(r['n_best'], r['focus']))
+        if not r['changes']:
+            lines.append('Your set is already the best your gear can do for this.')
+        tip = advice(r['n_best'], r['focus'])
+        if tip:
+            lines.append(tip + '.')
+        self.sim_result.config(text='\n'.join(lines))
+        marks = list(r['changes'])
+        self.sim_grid_now.show(now_gear, {s: '#fbe3c4' for s in marks})
+        self.sim_grid_best.show(names(r['best']), {s: '#c8efc0' for s in marks})
+        self.sim_best = (path, set_path, r['changes']) if r['changes'] else None
+        self.sim_best_gear = {s: healing.gs_name(c) for s, c in r['best'].items() if c and s not in ('main', 'sub')}
+        self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
+        self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
+        self._sim_view = (now_gear, names(r['best']))
+        self._sim_slots_changed()
 
     def _sim_idle(self, find_best):
         """An idle or defense set: judged on the game's item text (idle.py), wsdist has no idle maths."""
@@ -2492,8 +3143,16 @@ class App(tk.Tk):
         self.sim_best_gear = {s: healing.gs_name(c) for s, c in r['best'].items() if c and s not in ('main', 'sub') or (c and not r['keep'])}
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
+        self._sim_view = (now_gear, names(r['best']))
+        self._sim_slots_changed()
 
     def simulate(self, find_best):
+        if self.sim_set.get() and pld.takes(self.sim_set.get(), checks.job_of(self.sim_file.get() or '')):
+            self._sim_pet(find_best, mod=pld)
+            return
+        if self.sim_set.get() and pup.is_pet_set(self.sim_set.get(), checks.job_of(self.sim_file.get() or '')):
+            self._sim_pet(find_best)
+            return
         if self.sim_set.get() and idle.is_idle(self.sim_set.get()):
             self._sim_idle(find_best)
             return
@@ -2506,6 +3165,13 @@ class App(tk.Tk):
         name, set_path = self.sim_file.get(), self.sim_set.get()
         if not name or not set_path:
             messagebox.showinfo('GearSwap Doctor', 'Pick a file and a set first.')
+            return
+        k = magic.kind_of(set_path, checks.job_of(name) or '')
+        if k and k[0] in ('nuke', 'blue'):
+            self._sim_magic(find_best)
+            return
+        if k and k[0] in ('bluephys', 'bluebreath'):
+            self._sim_points(find_best, k[0])
             return
         path = os.path.join(doctor.GS_DATA, name)
         job, sub, tp, enemy = checks.job_of(name), self.sim_sub.get(), int(self.sim_tp.get()), self.sim_enemy.get()
@@ -2571,15 +3237,126 @@ class App(tk.Tk):
                 self.after(0, lambda e=e: self._sim_failed(e))
         threading.Thread(target=work, daemon=True).start()
 
+    def _sim_magic(self, find_best, wait=False):
+        """A nuke set - black, scholar or blue magic: wsdist's spell maths (magic.py). A mage's weapons may change too."""
+        name, set_path = self.sim_file.get(), self.sim_set.get()
+        path = os.path.join(doctor.GS_DATA, name)
+        job, sub, enemy = checks.job_of(name), self.sim_sub.get(), self.sim_enemy.get()
+        target = self._sim_target()
+        if find_best and self.sim_remember.get():
+            self.set_dt_target(path, set_path, target)
+        who = self.who.get()
+        buff_key, buffs = self.sim_buff_choice()
+        spell, opts = target.get('spell'), target.get('magic') or {}
+        self.sim_status.config(text='wsdist is working ...')
+        self.progress.config(mode='indeterminate'); self.progress.start(12)
+
+        def work():
+            try:
+                import wsdist_runner as W
+                ld = self.loaded_file(path)
+                items = self.items or checks.Items()
+                bags = checks.load_bags(who) or {}
+                owned_ids = set()
+                for b, c in bags.items():
+                    if not b.startswith('_') and b in checks.EQUIP_BAGS:
+                        owned_ids |= set(c)
+                index = W.gear_index()
+                worn, under = magic.merged_gear(ld, set_path, job)
+                weapons = [(s['path'], s['gear']) for s in ld.sets if s['path'].startswith('sets.weapons')]
+                free = magic.free_weapons(job) and not (target.get('main') or target.get('sub'))
+                owned, cur, notes = magic.plan(job, sub, doctor.with_weapons(worn, target), weapons, owned_ids, items, index, free=free)
+                if under:
+                    notes = notes + [f'judged as worn: on top of {under}']
+                req = W.dt_requirement(target)
+                info = {'buffs': W.buff_text(buff_key), 'magic': magic.words(spell, opts)}
+                now_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in cur.items() if e and e.get('Name') != 'Empty'}
+                best_gear = None
+                if find_best:
+                    best, dmg, now = magic.best_set(job, sub, spell, owned, cur, enemy_name=enemy, req=req, info=info, buffs=buffs, opts=opts)
+                    best_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in best.items() if e and e['Name'] != 'Empty'}
+                    if best_gear.get('body') in magic.HOODED:
+                        info['hood'] = True
+                        info['head_in_set'] = magic.head_in(worn)
+                else:
+                    now, dmg = magic.value(job, sub, spell, cur, enemy_name=enemy, buffs=buffs, opts=opts, info=info), None
+                info['asked'] = req
+                info['free'] = free
+                done = lambda: self._sim_done(path, set_path, spell, now, dmg, now_gear, best_gear, notes, 0, enemy, info, 'damage')  # noqa: E731
+            except Exception as e:
+                done = lambda e=e: self._sim_failed(e)  # noqa: E731
+            done() if wait else self.after(0, done)
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _sim_points(self, find_best, kind):
+        """A physical or breath blue magic set: wsdist has neither, so points (gs_create.POINTS: STR / DEX / accuracy / attack, or HP)."""
+        name, set_path = self.sim_file.get(), self.sim_set.get()
+        path = os.path.join(doctor.GS_DATA, name)
+        job, sub = checks.job_of(name), self.sim_sub.get()
+        target = self._sim_target()
+        need = {k: target[k] for k in ('dt', 'pdt', 'mdt') if target.get(k)}
+
+        def work():
+            try:
+                ld = self.loaded_file(path)
+                gear = next(s['gear'] for s in ld.sets if s['path'] == set_path)
+                cands, counts = self._heal_cands(job)
+                its = self.items or checks.Items()
+                cur = healing.set_to_gear(gear, its, self._heal_data)
+                pool = [c for c in cands if any(c['stats'].get(k) for k in gs_create.POINTS[kind])]
+                if find_best:
+                    best, val, now = healing.build('points', pool, cur, {}, job, sub, spell=kind, need=need, keep_weapons=True, counts=counts)
+                else:
+                    best, val, now = cur, None, healing.evaluate('points', cur, {}, kind)[0]
+                self.after(0, lambda: self._sim_points_done(path, set_path, kind, cur, best, val, now))
+            except Exception as e:
+                self.after(0, lambda e=e: self._sim_failed(e))
+        self.sim_status.config(text='Working it out from your gear ...')
+        self.progress.config(mode='indeterminate'); self.progress.start(12)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sim_points_done(self, path, set_path, kind, cur, best, val, now):
+        self.progress.stop(); self.progress.config(mode='determinate', value=0)
+        what = {'bluephys': 'Physical blue magic', 'bluebreath': 'Breath blue magic'}[kind]
+        how = {'bluephys': 'STR first, then DEX, accuracy and attack (wsdist has no physical blue magic: points, not damage)',
+               'bluebreath': 'HP: breath damage is a share of your HP (wsdist has no breath maths: points)'}[kind]
+        names = lambda g: {s: c['name'] for s, c in g.items() if c}  # noqa: E731
+        self._sim_last = (path, set_path)
+        self.sim_status.config(text=f'{what}: judged by {how}.')
+        if val is None:
+            self.sim_result.config(text=f'Your set = {now:,.0f} points')
+            self.sim_grid_now.show(names(cur))
+            self.sim_grid_best.show({})
+            self.sim_best = None
+            self.sim_apply_btn.config(state='disabled')
+            self.sim_new_btn.config(state='disabled')
+            return
+        ch = healing.changes(cur, best, True)
+        self.sim_result.config(text=f'Your set = {now:,.0f} points    Best = {val:,.0f} points' + ('' if ch else '\nYour set is already the best your gear can do for this.'))
+        self.sim_grid_now.show(names(cur), {s: '#fbe3c4' for s in ch})
+        self.sim_grid_best.show(names(best), {s: '#c8efc0' for s in ch})
+        self.sim_best = (path, set_path, ch) if ch else None
+        self.sim_best_gear = {s: healing.gs_name(c) for s, c in best.items() if c and s not in ('main', 'sub')}
+        self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
+        self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
+        self._sim_view = (names(cur), names(best))
+        self._sim_slots_changed()
+
     def _sim_done(self, path, set_path, what, now, dmg, now_gear, best_gear, notes, tp, enemy, info=None, metric='time'):
         self.progress.stop(); self.progress.config(mode='determinate', value=0)
         info = info or {}
         tpset = what == 'tp'
-        label = (f'TP set, weapon skill at {tp} TP' if tpset else f'{what} at {tp} TP') + f' on {enemy}'
+        label = (f'TP set, weapon skill at {tp} TP' if tpset else info['magic'] if info.get('magic') else f'{what} at {tp} TP') + f' on {enemy}'
         if info.get('buffs'):
             label += ', ' + info['buffs']
         metric = info.get('metric', metric)
         notes = list(notes) + doctor._am_notes(info)
+        import gsd_enemies
+        if gsd_enemies.note(enemy):
+            notes.append(gsd_enemies.note(enemy))
         self.sim_status.config(text=label + (('   (' + '; '.join(notes) + ')') if notes else ''))
         unit = {'time': ' s to a WS', 'dps': ' damage a second'}.get(metric, ' per round') if tpset else ''
 
@@ -2589,8 +3366,8 @@ class App(tk.Tk):
         def dts(t):
             return f'physical {t[0]:.0f}%  magic {t[1]:.0f}%' if t else '?'
         if dmg is None:
-            self.sim_result.config(text=('Your set = ' + fmt(now) + '\n' if tpset else f'Average damage = {now:>8.0f}\n')
-                                   + 'Damage taken: ' + dts(info.get('now')))
+            self.sim_result.config(text='\n'.join([('Your set = ' + fmt(now) if tpset else f'Average damage = {now:>8.0f}'), 'Damage taken: ' + dts(info.get('now'))]
+                                                  + ([] if info.get('magic') else self._real_lines(what, tpset, tp, enemy, now, now_gear))))
             self.sim_grid_now.show(now_gear)
             self.sim_grid_best.show({})
             self.sim_best = None
@@ -2611,8 +3388,12 @@ class App(tk.Tk):
             else:
                 lines.append(f'⚠ Your gear can\'t reach physical {req[0]:.0f}% / magic {req[1]:.0f}% here - this is the '
                              'closest wsdist found.')
+        lines += [] if info.get('magic') else self._real_lines(what, tpset, tp, enemy, now, now_gear)
         self.sim_result.config(text='\n'.join(lines))
-        changes = {s_: n for s_, n in best_gear.items() if s_ not in ('main', 'sub', 'range') and now_gear.get(s_) != n}
+        keep_w = ('main', 'sub', 'range') if not info.get('free') else ('range',)
+        changes = {s_: n for s_, n in best_gear.items() if s_ not in keep_w and now_gear.get(s_) != n}
+        if info.get('hood') and (now_gear.get('head') or info.get('head_in_set')):
+            changes['head'] = 'empty'                        # (a hooded cloak: the set's head has to go)
         for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):          # only swapped sides: not a change
             if sorted(filter(None, [now_gear.get(p1), now_gear.get(p2)])) == sorted(filter(None, [best_gear.get(p1), best_gear.get(p2)])):
                 changes.pop(p1, None)
@@ -2620,20 +3401,71 @@ class App(tk.Tk):
         self.sim_grid_now.show(now_gear, {s_: '#fbe3c4' for s_ in changes})
         self.sim_grid_best.show(best_gear, {s_: '#c8efc0' for s_ in changes})
         self.sim_best = (path, set_path, changes) if changes and (gain > 0 or req) else None
-        self.sim_best_gear = {s_: n for s_, n in best_gear.items() if s_ not in ('main', 'sub', 'range')}
+        self.sim_best_gear = {s_: n for s_, n in best_gear.items() if s_ not in keep_w}
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal')
+        self._sim_view = (now_gear, best_gear)
+        self._sim_slots_changed()
         self._sim_last = (path, set_path)
+
+    def _real_lines(self, what, tpset, tp, enemy, now, now_gear):
+        """His real fights beside wsdist's number, when the feature has recorded any."""
+        try:
+            rows = real_fights.read(self.who.get(), doctor.GS_DATA)
+            job = checks.job_of(self.sim_file.get())
+            weapon = now_gear.get('main')
+            if tpset:
+                line = real_fights.melee_line(real_fights.melee(rows, weapon, enemy, job))
+            else:
+                line = real_fights.compare(real_fights.ws(rows, what, weapon, tp, enemy, job), now, enemy)
+            return [line] if line else []
+        except Exception:
+            return []
 
     def _sim_failed(self, e):
         self.progress.stop(); self.progress.config(mode='determinate', value=0)
         self.sim_status.config(text=f'wsdist could not do it: {e}')
 
+    def _sim_ticked(self, gear):
+        """Only what's in a ticked slot (the range slot isn't offered: it's never changed)."""
+        return {s: v for s, v in (gear or {}).items() if s not in self.sim_slots or self.sim_slots[s].get()}
+
+    def _sim_all_slots(self, value):
+        for v in self.sim_slots.values():
+            v.set(value)
+        self._sim_slots_changed()
+
+    def _sim_slots_changed(self):
+        """The ticks changed: what's offered, the colours in the grids, and a word about what it means."""
+        changes = self._sim_ticked(self.sim_best[2]) if self.sim_best else {}
+        gear = self._sim_ticked(self.sim_best_gear)
+        view = self._sim_view
+        self.sim_apply_btn.config(state='normal' if changes else 'disabled')
+        self.sim_new_btn.config(state='normal' if gear and view else 'disabled')
+        words = []
+        off = [s for s, v in self.sim_slots.items() if not v.get()]
+        if view:
+            now, best = view
+            self.sim_grid_now.show(now, {s: '#fbe3c4' for s in changes})
+            marks = {s: '#c8efc0' for s in changes}
+            marks.update({s: '#e4e4e4' for s in off if best.get(s)})
+            self.sim_grid_best.show(best, marks)
+            if off:
+                words.append(f"Left out: {', '.join(SLOT_TEXT.get(s, s) for s in off)}. The numbers above are for the whole best set.")
+            merged = dict(now)
+            merged.update({s: (v.get('name') if isinstance(v, dict) else v) for s, v in changes.items()})
+            for a, b in (('ear1', 'ear2'), ('ring1', 'ring2')):
+                if merged.get(a) and merged.get(a) == merged.get(b) and (a in changes or b in changes):
+                    words.append(f"That puts {merged[a]} in both {SLOT_TEXT[a]} and {SLOT_TEXT[b]}: you'd need two of them.")
+        self.sim_slots_note.config(text='  '.join(words))
+
     def sim_apply(self):
         if not self.sim_best:
             return
         path, set_path, changes = self.sim_best
-        self._apply({path: [('slots', set_path, changes)]})
+        changes = self._sim_ticked(changes)
+        if changes:
+            self._apply({path: [('slots', set_path, changes)]})
 
     def sim_save_new(self):
         """The best set as a new set next to the one it was built from: sets.engaged + 'HighDT' -> sets.engaged.HighDT."""
@@ -2642,7 +3474,7 @@ class App(tk.Tk):
         path, set_path = self._sim_last
         from tkinter import simpledialog
         name = simpledialog.askstring('GearSwap Doctor - save as a new set',
-                                      f'A name for the new set. It goes right after {set_path} in the file:\n\n'
+                                      f'A name for the new set, with the {len(self._sim_ticked(self.sim_best_gear))} ticked slots. It goes right after {set_path} in the file:\n\n'
                                       f'    {set_path}.<name>\n\nFor example DT, HighDT, Safe. (GearSwap only uses it when '
                                       "your file's rules ask for it - in Mote-style files, a set named after a mode such "
                                       'as DT is used when that mode is on.)', initialvalue='DT', parent=self)
@@ -2651,7 +3483,7 @@ class App(tk.Tk):
         name = name.strip()
         new_path = set_path + ('.' + name if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name) else '["' + name.replace('"', '') + '"]')
         target = self._sim_target()
-        if self._apply({path: [('add', set_path, new_path, dict(self.sim_best_gear))]}) is not False and self.sim_remember.get():
+        if self._apply({path: [('add', set_path, new_path, self._sim_ticked(self.sim_best_gear))]}) is not False and self.sim_remember.get():
             self.set_dt_target(path, new_path, target)
 
     # ------------------------------------------------------------------ My gear
@@ -3198,10 +4030,15 @@ class App(tk.Tk):
         if not quiet:
             messagebox.showerror('GearSwap Doctor', f'The check-up failed:\n{e}')
 
-    def daily(self):
+    def daily(self, opening=False):
+        """Once an hour: a check-up when the last one is a day old. Never when the window opens (his report 2026-11-05: "the check now seems to always
+        automatically run ... its already storing the previous sets"): the saved report is shown, and Check now is his to click."""
         r = self.report
         if self.cfg.get('daily', True):
-            if not self.busy and (not r or time.time() - r['time'] > 24 * 3600):
+            if opening:
+                if r and time.time() - r['time'] > 24 * 3600 and not self.busy:
+                    self.status.config(text=f"Showing the check-up from {ago(r['time'])}. Click Check now when you want a new one.")
+            elif not self.busy and (not r or time.time() - r['time'] > 24 * 3600):
                 self.run_check(quiet=True)
             if updater.due():
                 threading.Thread(target=self._ws_check_bg, daemon=True).start()
@@ -3220,12 +4057,18 @@ class App(tk.Tk):
         self._apply(by_file)
 
     def _apply(self, by_file):
+        # (an upgrade from an older report can still ask for ammo that takes a gun off)
+        items = self.items or checks.Items()
+        by_file = {p: job_rules.safe_edits(checks.job_of(p), e, items) for p, e in by_file.items()}
+        by_file = {p: e for p, e in by_file.items() if e}
+        if not by_file:
+            return False
         lines = []
         for path, edits in by_file.items():
             lines.append(os.path.basename(path) + ':')
             for e in edits:
                 lines.append(f'   {e[1]} -> {e[2]}' if e[0] == 'rename' else f'   new set {e[2]}' if e[0] == 'add'
-                             else f'   new set {e[1]}' if e[0] == 'new'
+                             else f'   new set {e[1]}' if e[0] == 'new' else f'   {e[1]}: HP order' if e[0] == 'priority'
                              else f'   {e[1]}: ' + ', '.join(f'{k} {fixer.item_text(v)}' for k, v in e[2].items()))
         if not self.confirm_changes(by_file):
             return False
@@ -3247,7 +4090,7 @@ class App(tk.Tk):
         w.title('Change these GearSwap files?')
         w.geometry('900x480')
         w.transient(self)
-        n = sum(len(e[2]) if e[0] in ('slots', 'new') else len(e[3]) if e[0] == 'add' else 1 for edits in by_file.values() for e in edits)
+        n = sum(len(e[2]) if e[0] in ('slots', 'new', 'priority') else len(e[3]) if e[0] == 'add' else 1 for edits in by_file.values() for e in edits)
         ttk.Label(w, text=f'{n} change(s) in {len(by_file)} file(s):', font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
         frame = ttk.Frame(w)
         frame.pack(fill='both', expand=True, padx=10)
@@ -3269,6 +4112,10 @@ class App(tk.Tk):
                 elif e[0] == 'new':
                     for slot, new in e[2].items():
                         t.insert('', 'end', text=os.path.basename(path), values=(e[1] + '  (new set)', slot, '', fixer.item_text(new)))
+                elif e[0] == 'priority':
+                    cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
+                    for slot, n in sorted(e[2].items(), key=lambda x: -x[1]):
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[1] + '  (HP order)', slot, cur.get(gs_slot(slot) or slot, ''), f'same, priority={n}'))
                 else:
                     cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
                     for slot, new in e[2].items():
@@ -3405,6 +4252,14 @@ def selftest(out_path):
                     break
             if 'healing' in out:
                 break
+        # nukes (magic.py): a blue spell (the Doctor's own maths: wsdist as downloaded has none) and a black one, with one staff
+        try:
+            items_ = checks.Items()
+            staff = {'main': W.pick_variant(W.entries_for('Marin Staff +1', items_, W.gear_index()))}
+            out['magic'] = {'Spectral Floe': magic.value('BLU', 'WAR', 'Spectral Floe', staff),
+                            'Thunder VI burst': magic.value('BLM', 'RDM', 'Thunder VI', staff, opts={'burst': True})}
+        except Exception as e:
+            out['magic'] = f'error: {e}'
         out['ok'] = True
     except Exception as e:
         import traceback

@@ -92,7 +92,7 @@ STAT_RX = [
     ('received', r'Potency of "Cure" effects? received \+(\d+)'), ('cure_flat', r'"Cure" ?\+(\d+)(?!\s*%)'),
     ('cure_cast', r'"?Cure"? (?:spell)?casting time ?-(\d+)'), ('heal_cast', r'Healing magic casting time ?-(\d+)'),
     ('skill', r'Healing magic skill ?\+(\d+)'), ('MND', r'\bMND ?\+(\d+)'), ('VIT', r'\bVIT ?\+(\d+)'), ('CHR', r'\bCHR ?\+(\d+)'),
-    ('HP', r'(?<![A-Za-z"])HP ?\+(\d+)'), ('MP', r'(?<![A-Za-z"])MP ?\+(\d+)'), ('fast', r'"Fast Cast" ?\+(\d+)'),
+    ('HP', r'(?<![A-Za-z"])HP ?\+(\d+)(?![\d%])'), ('MP', r'(?<![A-Za-z"])MP ?\+(\d+)(?![\d%])'), ('fast', r'"Fast Cast" ?\+(\d+)'),
     ('quick', r'(?:Occ\. quickens spellcasting|"?Quick Magic"?) ?\+(\d+)'), ('conserve', r'"Conserve MP" ?\+(\d+)'),
     ('haste', r'\bHaste ?\+(\d+)'), ('pdt', r'(?:Physical [Dd]amage taken|Phys\. dmg\. taken|\bPDT) ?-(\d+)'),
     ('mdt', r'(?:Magic [Dd]amage taken|Magic dmg\. taken|Mag\. dmg\. taken|\bMDT) ?-(\d+)'),
@@ -176,15 +176,29 @@ def candidate(it, data, augments=None):
         n = CURSNA_VALUE.get(it['en'].lower()) or CURSNA_VALUE.get(it['enl'].lower()) or 10
         st.pop('cursna_unknown')
         st['cursna'] = st.get('cursna', 0) + n
+    import gs_create
+    import pld
+    import pup
+    add(st, pup.parse(data.text.get(it['id'], '')))         # (what it gives a pet)
+    add(st, gs_create.parse(data.text.get(it['id'], '')))   # (the rest a new file's sets ask for)
+    add(st, pld.parse(data.text.get(it['id'], '')))         # (a tank's: Phalanx, enmity kept when hit ...)
     for a in augments or []:
         add(st, parse_text(str(a)))
+        add(st, pup.parse(str(a)))
+        add(st, gs_create.parse(str(a)))
+        add(st, pld.parse(str(a)))
     info = data.info.get(it['id'], {})
-    return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'],
+    text = data.text.get(it['id'], '')
+    # (a JSE earring whose stats are all "Right ear:": nothing in the left ear, so it only goes in the right)
+    side = 'ear2' if text.startswith('Right ear:') else 'ear1' if text.startswith('Left ear:') else None
+    return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'], 'side': side,
             'skill': info.get('skill'), 'shield': info.get('shield', False),
             'two_handed': info.get('skill') in TWO_HANDED and bool(it['slots'] & 1)}
 
 
 def fits(c, slot):
+    if c.get('side') and slot in ('ear1', 'ear2') and slot != c['side']:
+        return False
     return any(c['slots'] & (1 << b) for b in checks.SLOT_BITS.get(slot, []))
 
 
@@ -353,6 +367,15 @@ def evaluate(kind, gear, base, spell=None, solace=False):
     elif kind == 'idle':
         import idle
         v = idle.value(gear, spell, base)
+    elif kind == 'pet':
+        import pup
+        v = pup.value(gear, spell)
+    elif kind == 'points':
+        import gs_create
+        v = gs_create.value(gear, spell)
+    elif kind == 'pld':
+        import pld
+        v = pld.value(gear, spell)
     else:
         raise ValueError(kind)
     return v, t
@@ -385,7 +408,8 @@ def shortfall(t, need):
     n = 0
     dt = need.get('dt', 0)
     n += max(0, max(dt, need.get('pdt', 0)) - pd) + max(0, max(dt, need.get('mdt', 0)) - md)
-    n += max(0, need.get('enmity', 0) - (-t.get('enmity', 0)))
+    if need.get('enmity'):                                  # (less enmity asked for; enmity+ gear isn't "short" of anything otherwise)
+        n += max(0, need['enmity'] - (-t.get('enmity', 0)))
     n += max(0, need.get('sird', 0) - t.get('sird', 0))
     n += max(0, need.get('conserve', 0) - t.get('conserve', 0))
     return n
@@ -438,12 +462,14 @@ def _allowed(gear, slot, c, counts, job, sub):
     return job in ('NIN', 'DNC', 'THF', 'BLU') or sub in ('NIN', 'DNC')        # a second weapon: dual wield only
 
 
-def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weapons=False, solace=False, counts=None):
+def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weapons=False, solace=False, counts=None, only_slots=None):
     """The best set. cands: [candidate]; current: {slot: candidate}. Returns (best {slot: candidate}, best number, the
     number of the set now). Starts from the set as it is and from nothing; one swap at a time, then two together when
     one alone doesn't help."""
     counts = counts or {}
-    slots = [s for s in SLOTS if not (keep_weapons and s in ('main', 'sub'))]
+    import job_rules
+    no_ammo = job_rules.lock_ammo(job)                      # (a COR's or RNG's gun comes off with the wrong ammo)
+    slots = [s for s in SLOTS if not (keep_weapons and s in ('main', 'sub')) and not (no_ammo and s == 'ammo') and (only_slots is None or s in only_slots)]
     per_slot = {}
     for s in slots:
         seen, opts = set(), [None]
@@ -456,6 +482,10 @@ def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weap
             opts.append(current[s])
         per_slot[s] = opts
     fixed = {s: current.get(s) for s in ('main', 'sub')} if keep_weapons else {}
+    if only_slots is not None:                              # (the rest of the set stays as it is: a set worn on top of others)
+        fixed.update({s: current.get(s) for s in SLOTS if s not in slots and current.get(s)})
+    if no_ammo:
+        fixed['ammo'] = current.get('ammo')
     best_set, best_s = None, None
     starts = [dict(current), dict(fixed)]
     if need:                                                # (also from the gear with the most of what the set must have)

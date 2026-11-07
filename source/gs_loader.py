@@ -177,7 +177,7 @@ function GS_WALK(env, slots)
         else
           local augs = {}
           if type(rawget(v, 'augments')) == 'table' then for _, a in ipairs(v.augments) do augs[#augs + 1] = tostring(a) end end
-          gear[k] = { name = v.name, augments = augs, bag = type(rawget(v, 'bag')) == 'string' and v.bag or nil }
+          gear[k] = { name = v.name, augments = augs, bag = type(rawget(v, 'bag')) == 'string' and v.bag or nil, priority = type(rawget(v, 'priority')) == 'number' and v.priority or nil }
         end
       end
     end
@@ -275,6 +275,8 @@ def load(path):
         for k, v in s.gear.items():
             augs = [str(v.augments[j]) for j in range(1, len(v.augments) + 1)] if v.augments else []
             gear[str(k)] = {'name': str(v.name), 'augments': augs, 'bag': str(v.bag) if v.bag else None}
+            if v.priority is not None:                  # (GearSwap equips the highest first: PLD files keep their HP that way)
+                gear[str(k)]['priority'] = int(v.priority)
         res.sets.append({'path': str(s.path), 'gear': gear})
     for i in range(1, len(broken) + 1):
         res.broken.append({'path': str(broken[i].path), 'line': int(broken[i].line)})

@@ -14,6 +14,8 @@ import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 import paths  # noqa: E402
+import gsd_enemies  # noqa: E402
+import job_rules  # noqa: E402
 import rema  # noqa: E402
 WS_DIR = paths.WSDIST
 
@@ -74,6 +76,7 @@ def _load_wsdist():
         finally:
             os.chdir(cwd)
         _mods = {'gear': gear, 'wsdist': wsdist, 'create_player': create_player, 'enemies': enemies, 'actions': actions, 'buffs': buffs}
+        gsd_enemies.add_to(enemies.preset_enemies)        # (the Locus monsters: our list, on top of Kastra's)
         _add_overall_dps(_mods)
     return _mods
 
@@ -631,7 +634,7 @@ def entries_for(name, items, index):
     return None
 
 
-def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_where=None):
+def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_where=None, file_range=False):
     """Everything for one weapon skill set: the options per slot (owned, this job, known to wsdist), the current set
     as wsdist sees it, locked slots (the weapon, items wsdist doesn't know). Returns (owned, current, notes)."""
     import checks
@@ -690,6 +693,8 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
             if stage < 4:
                 notes.append(f"{main['Name']}: your stage {stage} is judged as stage IV, the lowest wsdist has")
     locked |= {'main', 'sub', 'ranged'}                     # weapons are GearSwap's weapon sets' business
+    if job_rules.lock_ammo(job, set_gear, file_range):      # (ammo that isn't a bullet takes a COR's gun off: wsdist can't see a gun his sets don't name)
+        locked.add('ammo')
     owned = {}
     for iid in owned_ids:
         it = items.by_id.get(iid)

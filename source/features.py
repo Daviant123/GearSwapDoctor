@@ -253,6 +253,10 @@ FEATURES = [
               ('gear1', 'gear', 'Lv.1: or these items', {}, {'slots': ['ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet']}),
               ('gearrelic', 'gear', 'Relic: or these items', {}, {'slots': ['ammo', 'head', 'neck', 'ear1', 'ear2', 'body', 'hands', 'ring1', 'ring2', 'back', 'waist', 'legs', 'feet']})],
      'jobs': MELEE, 'already': r'CustomMeleeGroups:append|Aftermath: ?Lv|aftermath_up'},
+    {'key': 'fights', 'title': 'Record my real damage', 'group': 'Fighting',
+     'what': 'Writes down your own hits, misses, crits and weapon skill damage while you play, by monster, weapon and Aftermath level. Build a set then shows your real numbers beside '
+             "wsdist's, so you can see how close it is. It only reads what the game shows you and stays on your PC.",
+     'opts': [], 'jobs': MELEE},
     {'key': 'ammo', 'title': 'Low ammo warning', 'group': 'Comfort',
      'what': 'After each shot, a red warning in the chat when the ammo you use is running low.',
      'opts': [('count', 'int', 'Warn at (or below)', 20, {'lo': 5, 'hi': 99, 'step': 5})],
@@ -422,6 +426,8 @@ def suggest(job, src, set_paths, owned):
     if job in MELEE and job != 'BRD':
         named = [p for p in set_paths if re.search(r'haste', p, re.I)]
         out['haste'] = f'your file has {len(named)} Haste sets: this says when they apply' if named else f'{job} fights: know when delay is capped'
+    if job in MELEE and job != 'BRD':
+        out['fights'] = "see your real damage beside wsdist's numbers"
     ult = [it['en'] for it in owned if fits(it, 'main') and rema.family(it['en']) not in (None, 'Aeonic')]
     if am_sets(set_paths):
         out['aftermath'] = f'your file has {len(am_sets(set_paths))} Aftermath sets'
@@ -698,6 +704,7 @@ function SIM_NEW(src, name, engine)
     ffxi = { get_player = function() return { id = S.me.id, status = S.me.status, vitals = S.me.vitals, buffs = S.me.buffs } end,
              get_items = function(a, b) if a == 'equipment' then return S.eq end return S.bag[b] end,
              get_mob_by_target = function(t) if t == 'me' then return S.me end return S.mobs[t] end,
+             get_mob_by_id = function(id) return S.mobs[id] end,
              get_spell_recasts = function() return S.recasts end, get_ability_recasts = function() return S.recasts end },
     raw_register_event = function(n, f) S.events[n] = f return 1 end,
     register_event = function(n, f) S.events[n] = f return 1 end,
@@ -712,7 +719,10 @@ function SIM_NEW(src, name, engine)
     return true
   end
   e.require = function() return ANY end
-  e.gearswap = { equip_list = S.equip, res = { item_descriptions = S.desc, items = S.ritems },
+  S.written = {}
+  e.lua_base_path = 'sim/'
+  e.gearswap = { equip_list = S.equip, res = { item_descriptions = S.desc, items = S.ritems, weapon_skills = { [1] = { en = 'Savage Blade' } } },
+                 io = { open = function(p, mode) S.written_path = p return { write = function(_, ...) for _, x in ipairs({...}) do S.written[#S.written + 1] = tostring(x) end end, close = function() end } end },
                  extdata = { decode = function(it) return { augments = S.augs[it.id] } end } }
   setmetatable(e, { __index = function(t, k) return ANY end })
   e._G = e

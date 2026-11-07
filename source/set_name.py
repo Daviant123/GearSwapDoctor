@@ -9,6 +9,7 @@ Nothing here runs wsdist: FileInfo(loaded, index) -> .read(path) -> {'weapon', '
 import re
 
 import fixer
+import job_rules
 import rema
 
 # Set names for a kind of weapon -> wsdist's Skill Type
@@ -70,6 +71,7 @@ class FileInfo:
             if len(word) >= 5 and word != norm(name):
                 self.short.setdefault(word, self.weapons.get(norm(name), name))
         paths = [s['path'] for s in loaded.sets]
+        self.file_range = job_rules.file_uses_range(loaded)
         self.named = set()                       # weapons with sets of their own
         self.with_am = set()                     # weapons (or kinds, or '') that have Aftermath sets
         for p in paths:

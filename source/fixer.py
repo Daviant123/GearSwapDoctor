@@ -192,6 +192,39 @@ def set_slots(src, path, changes):
     return src[:start] + body + src[end + 1:]
 
 
+def set_priority(src, path, prio):
+    """prio: {slot key as written: number}. Each of those pieces in the set's own {..} gets priority=number (GearSwap equips the highest first);
+    "Name" becomes { name="Name", priority=n }. A piece named through a variable (gear.x) is left as it is."""
+    start, end = find_set(src, path)
+    body = src[start:end + 1]
+    for key, n in prio.items():
+        mask = _code_positions(body)
+        rx = re.compile(r'(?<![A-Za-z0-9_])' + re.escape(key) + r'\s*=\s*')
+        hit = None
+        for m in rx.finditer(body):
+            if mask[m.start()] and _depth(body, m.start()) == 1:
+                hit = m
+        if not hit:
+            continue
+        vs = hit.end()
+        ve = _value_end(body, vs)
+        val = body[vs:ve]
+        if val[:1] in '"\'':
+            new = '{ name=' + val + ', priority=' + str(int(n)) + ' }'
+        elif val[:1] == '{':
+            vmask = _code_positions(val)
+            old = [m for m in re.finditer(r'(?<![A-Za-z0-9_])priority\s*=\s*-?\d+', val) if vmask[m.start()] and _depth(val, m.start()) == 1]
+            if old:
+                new = val[:old[-1].start()] + 'priority=' + str(int(n)) + val[old[-1].end():]
+            else:
+                inner = val[1:-1].rstrip()
+                new = '{' + inner + ('' if inner.endswith(',') or not inner.strip() else ',') + ' priority=' + str(int(n)) + ' }'
+        else:
+            continue
+        body = body[:vs] + new + body[ve:]
+    return src[:start] + body + src[end + 1:]
+
+
 def _statement_end(src, path):
     "(end of the line where this set's statement ends, its indent); None when the file doesn't make it."
     mask = _code_positions(src)
@@ -330,6 +363,9 @@ def apply(path, edits):
             elif e[0] == 'new':
                 new = add_new_set(new, e[1], e[2], e[3])
                 done.append(f'new set {e[1]}')
+            elif e[0] == 'priority':
+                new = set_priority(new, e[1], e[2])
+                done.append(f'{e[1]}: HP order')
         except EditError as x:
             failed.append(str(x))
     if new == src:
