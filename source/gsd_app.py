@@ -54,7 +54,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.18.3'
+VERSION = '2.19.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -70,6 +70,7 @@ SLOT_TEXT = {'main': 'Main', 'sub': 'Sub', 'range': 'Range', 'ammo': 'Ammo', 'he
 JOBS = ['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU',
         'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN']
 OFF, ON = '☐', '☑'
+PICK_ONE = '(pick one)'
 TP_METRIC_TEXT = {'time': 'time to a weapon skill', 'damage': 'damage per attack round', 'dps': 'damage a second, with weapon skills'}
 WPN_AUTO = '(as in the file)'
 
@@ -356,6 +357,23 @@ class GearGrid(ttk.LabelFrame):
             self.columnconfigure(c, weight=1, uniform='slot')
         for r in range(4):
             self.rowconfigure(r, uniform='row')
+        self.picks = {}
+
+    def clear_picks(self):
+        for cb in self.picks.values():
+            cb.destroy()
+        self.picks = {}
+
+    def pick(self, slot, choices, current, on_pick):
+        """A dropdown in a slot (his request 2026-11-07: every slot filled - where wsdist has nothing, suggestions to pick
+        from). on_pick(slot, name) when he picks one."""
+        f, cap, body = self.cells[slot]
+        cb = ttk.Combobox(f, values=choices, state='readonly', font=('Segoe UI', 8))
+        cb.set(current)
+        cb.bind('<<ComboboxSelected>>', lambda e: on_pick(slot, cb.get()))
+        cb.place(x=2, y=16, relwidth=1, width=-6)
+        self.picks[slot] = cb
+        body.configure(text='', image='')
 
     def _icon(self, name):
         if not name or not os.path.isdir(ICONS):
@@ -370,11 +388,15 @@ class GearGrid(ttk.LabelFrame):
             self.images[iid] = tk.PhotoImage(file=path) if os.path.exists(path) else None
         return self.images[iid]
 
-    def show(self, gear, marks=None, tips=None):
-        """gear: {gs slot: item name}; marks: {gs slot: background colour}."""
+    def show(self, gear, marks=None, tips=None, keep_picks=False):
+        """gear: {gs slot: item name}; marks: {gs slot: background colour}. A new result takes the dropdowns away."""
         marks, tips = marks or {}, tips or {}
+        if not keep_picks:
+            self.clear_picks()
         for slot, (f, cap, body) in self.cells.items():
             name = gear.get(slot) or ''
+            if slot in self.picks:                          # (the dropdown shows the item)
+                name = ''
             bg = marks.get(slot, '#ffffff')
             for w in (f, cap, body):
                 w.configure(bg=bg)
@@ -3574,6 +3596,15 @@ class App(tk.Tk):
         if gsd_enemies.note(enemy):
             notes.append(gsd_enemies.note(enemy))
         self.sim_status.config(text=label + (('   (' + '; '.join(notes) + ')') if notes else ''))
+        # every slot filled (his request 2026-11-07): what the set wears that wsdist doesn't know stays in both sets
+        kept = {s_: n for s_, n in self._set_names(path, set_path).items() if s_ not in now_gear}
+        now_gear = dict(now_gear, **kept)
+        if best_gear is not None:
+            best_gear = dict(best_gear)
+            for s_, n in kept.items():
+                best_gear.setdefault(s_, n)
+        self._sim_tips = {s_: '(kept: not in wsdist)' for s_ in kept}
+        self._sim_tips_best = {}
         unit = {'time': ' s to a WS', 'dps': ' damage a second'}.get(metric, ' per round') if tpset else ''
 
         def fmt(v):
@@ -3584,7 +3615,7 @@ class App(tk.Tk):
         if dmg is None:
             self.sim_result.config(text='\n'.join([('Your set = ' + fmt(now) if tpset else f'Average damage = {now:>8.0f}'), 'Damage taken: ' + dts(info.get('now'))]
                                                   + ([] if info.get('magic') else self._real_lines(what, tpset, tp, enemy, now, now_gear))))
-            self.sim_grid_now.show(now_gear)
+            self.sim_grid_now.show(now_gear, None, self._sim_tips)
             self.sim_grid_best.show({})
             self.sim_best = None
             self.sim_apply_btn.config(state='disabled')
@@ -3621,8 +3652,94 @@ class App(tk.Tk):
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal')
         self._sim_view = (now_gear, best_gear)
-        self._sim_slots_changed()
         self._sim_last = (path, set_path)
+        self._sim_offer(path, now_gear, best_gear, kept, keep_w)
+        self._sim_slots_changed()
+
+    def _set_names(self, path, set_path):
+        """{grid slot: item name} the set itself names (empty / none left out)."""
+        try:
+            gear = next(s['gear'] for s in self.loaded_file(path).sets if s['path'] == set_path)
+        except Exception:
+            return {}
+        out = {}
+        for key, g in gear.items():
+            slot = gs_loader.SLOTS.get(key.lower())
+            name = (g.get('name') if isinstance(g, dict) else g) or ''
+            if slot and name.lower() not in checks.SKIP_NAMES:
+                out[slot] = name
+        return out
+
+    def slot_choices(self, slot, job):
+        """What he owns (inventory / wardrobes) that this job can wear in a slot: the ones his files for the job use there
+        most first, then the highest item level. Names, at most 30."""
+        p = os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')
+        try:
+            snap = json.load(open(p, encoding='utf-8'))
+        except (OSError, ValueError):
+            return []
+        items = self.items or checks.Items()
+        bits = checks.SLOT_BITS.get(slot, [])
+        owned = [it for it in features.owned_items(items, snap.get('bags', {}), job)
+                 if any(it['slots'] & (1 << b) for b in bits)]
+        same = {'ear1': ('ear1', 'ear2'), 'ear2': ('ear1', 'ear2'),
+                'ring1': ('ring1', 'ring2'), 'ring2': ('ring1', 'ring2')}.get(slot, (slot,))
+        used = {}
+        for f in doctor.files_for(self.who.get()):
+            if checks.job_of(f) != job:
+                continue
+            try:
+                sets = self.loaded_file(f).sets
+            except Exception:
+                continue
+            for st in sets:
+                for key, g in st['gear'].items():
+                    if gs_loader.SLOTS.get(key.lower()) in same:
+                        n = ((g.get('name') if isinstance(g, dict) else g) or '').lower()
+                        used[n] = used.get(n, 0) + 1
+        ilvl = getattr(self, '_ilvl', None)
+        if ilvl is None:
+            ilvl = self._ilvl = {it['id']: it.get('ilvl', 0) for it in progression.items()}
+
+        def uses(it):
+            return used.get(it['en'].lower(), 0) + (used.get(it['enl'].lower(), 0) if it['enl'].lower() != it['en'].lower() else 0)
+        owned.sort(key=lambda it: (-uses(it), -ilvl.get(it['id'], 0), -it.get('level', 0), it['en']))
+        return [it['en'] for it in owned][:30]
+
+    def _sim_offer(self, path, now_gear, best_gear, kept, keep_w):
+        """Dropdowns in the best set's slots that are empty or kept (wsdist couldn't judge them): his own gear to pick from."""
+        if best_gear is None:
+            return
+        job = checks.job_of(os.path.basename(path)) or ''
+        for row in GRID:
+            for slot in row:
+                if slot in keep_w or slot == 'range' or (slot in best_gear and slot not in kept):
+                    continue
+                choices = self.slot_choices(slot, job)
+                cur = best_gear.get(slot, '')
+                if cur and cur not in choices:
+                    choices = [cur] + choices
+                if not choices:
+                    self._sim_tips_best[slot] = '(nothing you own fits)'
+                    continue
+                self.sim_grid_best.pick(slot, ([] if cur else [PICK_ONE]) + choices, cur or PICK_ONE, self._sim_picked)
+
+    def _sim_picked(self, slot, name):
+        """He picked an item for a slot from the dropdown: it's in the best set (and in what Put it in / Save it as use)."""
+        if name == PICK_ONE or not self._sim_view:
+            return
+        now, best = self._sim_view
+        best[slot] = name
+        self.sim_best_gear = dict(self.sim_best_gear or {}, **{slot: name})
+        path, set_path = self._sim_last
+        changes = dict(self.sim_best[2]) if self.sim_best else {}
+        if now.get(slot) != name:
+            changes[slot] = name
+        else:
+            changes.pop(slot, None)
+        self.sim_best = (path, set_path, changes) if changes else None
+        self._sim_tips_best[slot] = '(your pick - not in the numbers)'
+        self._sim_slots_changed()
 
     def _real_lines(self, what, tpset, tp, enemy, now, now_gear):
         """His real fights beside wsdist's number, when the feature has recorded any."""
@@ -3662,10 +3779,12 @@ class App(tk.Tk):
         off = [s for s, v in self.sim_slots.items() if not v.get()]
         if view:
             now, best = view
-            self.sim_grid_now.show(now, {s: '#fbe3c4' for s in changes})
+            tips = getattr(self, '_sim_tips', {})
+            self.sim_grid_now.show(now, {s: '#fbe3c4' for s in changes}, tips)
+            tips = dict(tips, **getattr(self, '_sim_tips_best', {}))
             marks = {s: '#c8efc0' for s in changes}
             marks.update({s: '#e4e4e4' for s in off if best.get(s)})
-            self.sim_grid_best.show(best, marks)
+            self.sim_grid_best.show(best, marks, tips, keep_picks=True)
             if off:
                 words.append(f"Left out: {', '.join(SLOT_TEXT.get(s, s) for s in off)}. The numbers above are for the whole best set.")
             merged = dict(now)
