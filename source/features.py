@@ -261,6 +261,18 @@ FEATURES = [
      'what': 'After each shot, a red warning in the chat when the ammo you use is running low.',
      'opts': [('count', 'int', 'Warn at (or below)', 20, {'lo': 5, 'hi': 99, 'step': 5})],
      'jobs': {'COR', 'RNG'}, 'already': r'ammo.*count|count.*ammo'},
+    {'key': 'tools', 'title': 'Open Toolbags / Card Cases when you run out', 'group': 'Casting',
+     'what': 'Ninja (main or sub): a Ninjutsu spell with no tools left opens the right Toolbag from your inventory (as Ninja main, '
+             'the universal one - Toolbag (Shika) / (Ino) / (Cho) - first), then cast it again. Corsair: a Quick Draw with no card '
+             'opens a Trump Card Case (or that element\'s case). It also opens the next bag as soon as the last tool is used. '
+             'No spam: one bag at a time, not again for 8 seconds, never mid-action, stops after 3 tries, and only with a free '
+             'inventory slot.',
+     'opts': [('nin', 'bool', 'Ninja tools from Toolbags', True, {}),
+              ('universal', 'bool', 'Ninja main: universal Toolbags first (Shika / Ino / Cho)', True, {}),
+              ('cor', 'bool', 'Corsair cards from Card Cases', True, {}),
+              ('trump', 'bool', 'Corsair: Trump Card Case first', True, {}),
+              ('ahead', 'bool', 'Open the next bag when the last tool is used (not only when you try)', True, {})],
+     'jobs': MELEE, 'already': r'Toolbag|Card Case'},
     {'key': 'box', 'title': 'Small window with the modes', 'group': 'Modes',
      'what': 'A small window that shows DT / Treasure Hunter / weapon lock / reraise as they change. Drag it where you '
              'want it; //gs c gsd box hides / shows it.',

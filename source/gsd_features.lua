@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 4.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 5.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 4, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 5, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -425,6 +425,7 @@ end
 -- what happens before your own precast: Echo Drops when silenced, cancel Sneak for Spectral Jig
 function G.pre(spell)
     if spell.type == 'WeaponSkill' then G.ws_tp = math.floor((player.tp or 0) / 500) * 500 end
+    if G.tools_pre(spell) then return true end
     if on('silence') and spell.action_type == 'Magic' and buff('silence') then
         cancel_spell()
         local item = cfg.silence.item or 'Echo Drops'
@@ -694,6 +695,162 @@ function G.buff(name, gain)
     if gain and (n == 'dedication' or n == 'commitment') and next(G.locked) then G.unlock('ring used') end
 end
 
+-- Toolbags / card cases (his request 2026-11-07): a Ninjutsu spell (or a Quick Draw) with no tool (card) left opens the
+-- right Toolbag (Card Case) from the inventory. GearSwap itself stops a Ninjutsu with no tools before your file sees it,
+-- so the typed / macro command is read as it goes out. No spam: a bag isn't opened again for 8 s, at most 3 times in a row
+-- without the tools showing up, never while you're in an action, and only with a free inventory slot. Normal /item only.
+local NIN_TOOLS = {   -- spell family -> {its own tool, its Toolbag, the universal tool (Ninja main only), its Toolbag}
+    Katon = { 'Uchitake', 'Toolbag (Uchi)', 'Inoshishinofuda', 'Toolbag (Ino)' },
+    Hyoton = { 'Tsurara', 'Toolbag (Tsura)', 'Inoshishinofuda', 'Toolbag (Ino)' },
+    Huton = { 'Kawahori-Ogi', 'Toolbag (Kawa)', 'Inoshishinofuda', 'Toolbag (Ino)' },
+    Doton = { 'Makibishi', 'Toolbag (Maki)', 'Inoshishinofuda', 'Toolbag (Ino)' },
+    Raiton = { 'Hiraishin', 'Toolbag (Hira)', 'Inoshishinofuda', 'Toolbag (Ino)' },
+    Suiton = { 'Mizu-Deppo', 'Toolbag (Mizu)', 'Inoshishinofuda', 'Toolbag (Ino)' },
+    Utsusemi = { 'Shihei', 'Toolbag (Shihe)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Jubaku = { 'Jusatsu', 'Toolbag (Jusa)', 'Chonofuda', 'Toolbag (Cho)' },
+    Hojo = { 'Kaginawa', 'Toolbag (Kagi)', 'Chonofuda', 'Toolbag (Cho)' },
+    Kurayami = { 'Sairui-Ran', 'Toolbag (Sai)', 'Chonofuda', 'Toolbag (Cho)' },
+    Dokumori = { 'Kodoku', 'Toolbag (Kodo)', 'Chonofuda', 'Toolbag (Cho)' },
+    Aisha = { 'Soshi', 'Toolbag (Soshi)', 'Chonofuda', 'Toolbag (Cho)' },
+    Yurin = { 'Jinko', 'Toolbag (Jinko)', 'Chonofuda', 'Toolbag (Cho)' },
+    Tonko = { 'Shinobi-Tabi', 'Toolbag (Shino)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Monomi = { 'Sanjaku-Tenugui', 'Toolbag (Sanja)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Myoshu = { 'Kabenro', 'Toolbag (Kaben)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Migawari = { 'Mokujin', 'Toolbag (Moku)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Kakka = { 'Ryuno', 'Toolbag (Ryuno)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Gekka = { 'Ranka', 'Toolbag (Ranka)', 'Shikanofuda', 'Toolbag (Shika)' },
+    Yain = { 'Furusumi', 'Toolbag (Furu)', 'Shikanofuda', 'Toolbag (Shika)' },
+}
+local COR_CARDS = {   -- Quick Draw -> {its card, its Card Case}; Trump Card works for all of them
+    ['Fire Shot'] = { 'Fire Card', 'Fire Card Case' }, ['Ice Shot'] = { 'Ice Card', 'Ice Card Case' },
+    ['Wind Shot'] = { 'Wind Card', 'Wind Card Case' }, ['Earth Shot'] = { 'Earth Card', 'Earth Card Case' },
+    ['Thunder Shot'] = { 'Thunder Card', 'Thnd. Card Case' }, ['Water Shot'] = { 'Water Card', 'Water Card Case' },
+    ['Light Shot'] = { 'Light Card', 'Light Card Case' }, ['Dark Shot'] = { 'Dark Card', 'Dark Card Case' },
+}
+G.tool_try, G.tool_want, G.tool_said = {}, {}, {}
+
+local function inv_count(name)
+    local b = player and player.inventory
+    local it = type(b) == 'table' and b[name]
+    if type(it) == 'table' then return tonumber(it.count) or 0 end
+    return 0
+end
+local function job(which) return low(player and player[which]) end
+
+-- {tools that work, bags to open (in order)} for a spell / Quick Draw, or nil when it isn't ours
+function G.tools_for(name)
+    if type(name) ~= 'string' then return nil end
+    local fam = name:match('^(%a+):')
+    local t = fam and NIN_TOOLS[fam]
+    if t and on('tools') and cfg.tools.nin ~= false and (job('main_job') == 'nin' or job('sub_job') == 'nin') then
+        if job('main_job') == 'nin' then
+            if cfg.tools.universal ~= false then return { t[1], t[3] }, { t[4], t[2] } end
+            return { t[1], t[3] }, { t[2], t[4] }
+        end
+        return { t[1] }, { t[2] }
+    end
+    local c = COR_CARDS[name]
+    if c and on('tools') and cfg.tools.cor ~= false and job('main_job') == 'cor' then
+        if cfg.tools.trump ~= false then return { c[1], 'Trump Card' }, { 'Trump Card Case', c[2] } end
+        return { c[1], 'Trump Card' }, { c[2], 'Trump Card Case' }
+    end
+    return nil
+end
+
+local function tools_left(tools)
+    local n = 0
+    for _, x in ipairs(tools) do n = n + inv_count(x) end
+    return n
+end
+
+local function free_slot()
+    local ok, info = pcall(function() return windower.ffxi.get_bag_info(0) end)
+    if ok and type(info) == 'table' and tonumber(info.max) and tonumber(info.count) then
+        return tonumber(info.count) < tonumber(info.max)
+    end
+    return true
+end
+
+local function tools_say(key, msg)
+    local now = os.clock()
+    if now - (G.tool_said[key] or -100) < 60 then return end
+    G.tool_said[key] = now
+    add_to_chat(167, 'GearSwap Doctor: ' .. msg)
+end
+
+-- open a bag for this spell now, if it needs one (false: nothing done)
+function G.tools_open(name)
+    local tools, bags = G.tools_for(name)
+    if not tools then return false end
+    if tools_left(tools) > 0 then
+        for _, b in ipairs(bags) do G.tool_try[b] = nil end
+        return false
+    end
+    local now = os.clock()
+    for _, b in ipairs(bags) do
+        if inv_count(b) > 0 then
+            local t = G.tool_try[b]
+            if t and now < t.till then return false end              -- just opened one: give it time
+            if t and t.n >= 3 then
+                tools_say(b, b .. " didn't give any tools after 3 tries - stopped (//gs reload to try again)")
+                return false
+            end
+            if not free_slot() then
+                tools_say('full', 'no ' .. tools[1] .. ' left and the inventory is full - make room to open ' .. b)
+                return false
+            end
+            G.tool_try[b] = { till = now + 8, n = (t and t.n or 0) + 1 }
+            send_command('input /item "' .. b .. '" <me>')
+            say('no ' .. tools[1] .. ' left: opening ' .. b)
+            return true
+        end
+    end
+    tools_say(tools[1], 'no ' .. tools[1] .. ' left, and no ' .. table.concat(bags, ' / ') .. ' in the inventory!')
+    return false
+end
+
+-- a spell / Quick Draw that needs a look at its tools (when you're free: not mid-action)
+local function tools_want(name, delay)
+    if G.tools_for(name) then G.tool_want[name] = os.clock() + (delay or 0) end
+end
+
+function G.tools_tick()
+    if not on('tools') or not next(G.tool_want) or (midaction and midaction()) then return end
+    local now = os.clock()
+    for name, at in pairs(G.tool_want) do
+        if now >= at then
+            G.tool_want[name] = nil
+            if G.tools_open(name) then return end                   -- one bag at a time
+        end
+    end
+end
+
+-- the command as it goes out: /ma "Utsusemi: Ni" <me>, /nin ..., /ninjutsu ...
+local function tools_text(original)
+    if not on('tools') or type(original) ~= 'string' then return end
+    local cmd, name = original:match('^%s*/(%a+)%s+"([^"]+)"')
+    if not cmd then cmd, name = original:match('^%s*/(%a+)%s+(%a+: ?%a+)') end
+    if not cmd or not name then return end
+    cmd = cmd:lower()
+    if cmd == 'ma' or cmd == 'magic' or cmd == 'nin' or cmd == 'ninjutsu' then tools_want(name) end
+end
+
+-- a Quick Draw with no card: stopped (it can't go off) and the case opened; any spell / shot: the next one ready
+function G.tools_pre(spell)
+    if not on('tools') or spell.type ~= 'CorsairShot' then return false end
+    local tools = G.tools_for(spell.english)
+    if tools and tools_left(tools) == 0 then
+        cancel_spell()
+        tools_want(spell.english)
+        return true
+    end
+    return false
+end
+function G.tools_after(spell)
+    if not on('tools') or cfg.tools.ahead == false then return end
+    if spell.type == 'Ninjutsu' or spell.type == 'CorsairShot' then tools_want(spell.english, 1) end
+end
+
 -- every quarter second: moving or standing, low HP / MP, a Treasure Hunter tag that landed
 local function tick()
     local now = os.clock()
@@ -738,6 +895,7 @@ local function tick()
         send_command('gs c gsd refresh')
     end
     G.haste_tick(status)
+    G.tools_tick()
     if on('fights') and now - (G.fights_t or 0) > 60 then
         G.fights_t = now
         pcall(G.fights_flush)
@@ -779,7 +937,7 @@ function G.install()
         if spell.action_type == 'Magic' then G.obi(spell) end
         if spell.action_type == 'Magic' or spell.action_type == 'Ranged Attack' then G.th_tag(spell) end
         G.overlay(true) end)
-    wrap('aftercast', nil, function(spell) G.ammo(spell) G.overlay() G.box_update() end)
+    wrap('aftercast', nil, function(spell) G.ammo(spell) G.tools_after(spell) G.overlay() G.box_update() end)
     wrap('status_change', nil, function() G.overlay() G.box_update() end)
     wrap('buff_change', nil, function(name, gain) G.buff(name, gain) G.overlay() end)
     -- //gs c gsd ... is ours; everything else goes to your self_command as before
@@ -802,9 +960,10 @@ function G.install()
         pcall(G.fights_flush)
         if G.box and G.box.destroy then G.box:destroy() end
     end)
-    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') then
+    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') or on('tools') then
         windower.raw_register_event('prerender', tick)
     end
+    if on('tools') then windower.raw_register_event('outgoing text', function(o) pcall(tools_text, o) end) end
     if on('fights') then
         G.fights = {}
         windower.raw_register_event('action', function(act) pcall(on_fight, act) end)
