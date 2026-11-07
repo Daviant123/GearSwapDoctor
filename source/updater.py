@@ -52,7 +52,12 @@ FIXES = [('get_pdif.py',
          ('wsdist.py',
           '        spell_type = "Ninjutsu"\n    else:\n        spell_type = "Elemental Magic"\n',
           '        spell_type = "Ninjutsu"\n    elif spell_name in globals().get("blu_spell_data", {}):  # (GearSwap Doctor: blue magic, magic.BLUE)\n        spell_type = "Blue Magic"\n'
-          '    else:\n        spell_type = "Elemental Magic"\n')]
+          '    else:\n        spell_type = "Elemental Magic"\n'),
+         # the Kaja weapons (gsd_gear.py): the same weapon skill bonus as their upgrades (BG Wiki, his report 2026-11-07)
+         ('weapon_bonus.py',
+          '        "Gokotai": {"Blade: Ku": 0.6},\n',
+          '        "Gokotai": {"Blade: Ku": 0.6},\n'
+          '        "Kaja Katana": {"Blade: Ku": 0.6}, "Kaja Knife": {"Evisceration": 0.5}, "Kaja Lance": {"Impulse Drive": 0.4},  # (GearSwap Doctor)\n')]
 
 
 def apply_fixes(folder=None):

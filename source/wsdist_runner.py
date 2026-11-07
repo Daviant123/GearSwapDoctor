@@ -15,6 +15,7 @@ import threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 import paths  # noqa: E402
 import gsd_enemies  # noqa: E402
+import gsd_gear  # noqa: E402
 import job_rules  # noqa: E402
 import rema  # noqa: E402
 WS_DIR = paths.WSDIST
@@ -77,6 +78,7 @@ def _load_wsdist():
             os.chdir(cwd)
         _mods = {'gear': gear, 'wsdist': wsdist, 'create_player': create_player, 'enemies': enemies, 'actions': actions, 'buffs': buffs}
         gsd_enemies.add_to(enemies.preset_enemies)        # (the Locus monsters: our list, on top of Kastra's)
+        gsd_gear.add_to(gear)                             # (the Kaja weapons: our list, on top of Kastra's)
         _add_overall_dps(_mods)
     return _mods
 
