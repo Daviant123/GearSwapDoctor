@@ -56,7 +56,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.22.1'
+VERSION = '2.23.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -1935,6 +1935,30 @@ class App(tk.Tk):
         self.opt_status = ttk.Label(bar, text='', foreground='#555')
         self.opt_status.pack(side='left', padx=8)
 
+        # (his request 2026-11-10: "an option that lets me either choose a weapon and shield, or not choose one to make the sets with. because the sets would
+        # be vastly different between weapons")
+        wb = ttk.Frame(tab)
+        wb.pack(fill='x', pady=(6, 0))
+        lb = ttk.Label(wb, text='Make the sets with:')
+        lb.pack(side='left')
+        ToolTip(lb, "Pick the weapon and shield you'll tank with: their stats count in every set (Burtgang's hate kept and PDT II, Aegis' magic damage "
+                    "taken II, Priwen's and Sakpata's Sword's Phalanx ...) and the rest of each set is built around them. They are never written "
+                    "into the sets: your weapon sets / keys still choose what you hold. \"Each set's own\": every set as it is in the file.")
+        ttk.Label(wb, text='your weapon set').pack(side='left', padx=(8, 0))
+        self.opt_wset = ttk.Combobox(wb, state='readonly', width=20)
+        self.opt_wset.pack(side='left', padx=4)
+        self.opt_wset.bind('<<ComboboxSelected>>', lambda e: self._opt_wset_picked())
+        ttk.Label(wb, text='or Weapon').pack(side='left', padx=(8, 0))
+        self.opt_main = ttk.Combobox(wb, state='readonly', width=24)
+        self.opt_main.pack(side='left', padx=4)
+        self.opt_main.bind('<<ComboboxSelected>>', lambda e: self._opt_weapons_changed())
+        ttk.Label(wb, text='Shield').pack(side='left', padx=(8, 0))
+        self.opt_shield = ttk.Combobox(wb, state='readonly', width=22)
+        self.opt_shield.pack(side='left', padx=4)
+        self.opt_shield.bind('<<ComboboxSelected>>', lambda e: self._opt_weapons_changed())
+        self.opt_wnote = ttk.Label(wb, text='', foreground='#b36b00')
+        self.opt_wnote.pack(side='left', padx=8)
+
         self.opt_role = ttk.LabelFrame(tab, text='', padding=6)
         self.opt_role.pack(fill='x', pady=(6, 4))
         self.opt_role_text = ttk.Label(self.opt_role, text='', wraplength=1100, justify='left')
@@ -2085,8 +2109,10 @@ class App(tk.Tk):
                 r['picked'] = picked[r['path']]
         # (results already worked out for this file, gear and choices are kept: only what changed is built again)
         # (and only while the sets he stands in are the same: their HP is the line every other set is held to)
+        self._opt_ld, self._opt_path = ld, path
+        self._opt_fill_weapons()
         sig, stand = self._opt_signature(), {s['path']: s['gear'] for s in ld.sets if s['path'] in pld.STANDING}
-        same = self._opt_sig and (self._opt_sig[0], self._opt_sig[1], self._opt_sig[3], self._opt_sig[4]) == (sig[0], sig[1], sig[3], sig[4])
+        same = self._opt_sig and [self._opt_sig[i] for i in (0, 1, 3, 4, 5, 6)] == [sig[i] for i in (0, 1, 3, 4, 5, 6)]
         old = {r['path']: r for r in self.opt_rows} if same and getattr(self, '_opt_stand', None) == stand else {}
         self._opt_stand = stand
         for r in rows:
@@ -2100,6 +2126,81 @@ class App(tk.Tk):
                                     + ('' if any(r.get('r') for r in rows) else ' - press "Look at every set"'))
         self._opt_checks_fill()
 
+    def _opt_owned(self):
+        """(candidates, counts): his gear in the inventory and wardrobes this job can wear (read once per file and bags)."""
+        if self.items is None:
+            self.items = checks.Items()
+        if self._heal_data is None:
+            self._heal_data = healing.ItemData()
+        key = (self._opt_path, self.who.get(), self._opt_signature()[3]) if hasattr(self, 'opt_main') else None
+        if getattr(self, '_opt_owned_key', None) != key or not hasattr(self, '_opt_owned_v'):
+            bags = checks.load_bags(self.who.get()) or {}
+            self._opt_owned_v = doctor._owned_cands(self._opt_ld, self._opt_job(), bags, self.items)
+            self._opt_owned_key = key
+        return self._opt_owned_v
+
+    def _opt_fill_weapons(self):
+        """The weapon / shield lists: his own gear, and his file's weapon sets; his pick for this file comes back."""
+        try:
+            cands, _ = self._opt_owned()
+        except Exception:
+            cands = []
+        self._opt_mains, self._opt_subs = gear_opt.weapon_choices(cands, self._opt_job(), self.opt_sub.get())
+        self._opt_wsets = gear_opt.file_weapons(self._opt_ld)
+        each = gear_opt.EACH
+        self.opt_main.configure(values=[each] + list(self._opt_mains))
+        self.opt_shield.configure(values=[each] + list(self._opt_subs))
+        self.opt_wset.configure(values=[each] + [n for n, g in self._opt_wsets])
+        mine = ((self.cfg.get('opt_weapons') or {}).get(os.path.basename(self._opt_path)) or {})
+        self.opt_main.set(mine.get('main') if mine.get('main') in self._opt_mains else each)
+        self.opt_shield.set(mine.get('sub') if mine.get('sub') in self._opt_subs else each)
+        self.opt_wset.set(mine.get('set') if mine.get('set') in [n for n, g in self._opt_wsets] else each)
+        self._opt_wnote_show()
+
+    def _opt_weapons(self):
+        """{'main': candidate, 'sub': candidate} he picked (None for "each set's own"), or None."""
+        w = {'main': self._opt_mains.get(self.opt_main.get()) if hasattr(self, '_opt_mains') else None,
+             'sub': self._opt_subs.get(self.opt_shield.get()) if hasattr(self, '_opt_subs') else None}
+        return w if any(w.values()) else None
+
+    def _opt_wset_picked(self):
+        """One of his file's weapon sets: both lists set from it (what he doesn't have stays "each set's own", and says so)."""
+        name = self.opt_wset.get()
+        g = dict(self._opt_wsets).get(name) or {}
+        m = gear_opt.find_label(self._opt_mains, g.get('main'))
+        s_ = gear_opt.find_label(self._opt_subs, g.get('sub'))
+        self.opt_main.set(m or gear_opt.EACH)
+        self.opt_shield.set(s_ or gear_opt.EACH)
+        lost = [x['name'] for x, k in ((g.get('main'), m), (g.get('sub'), s_)) if x and not k]
+        self._opt_weapons_changed(keep_set=True, lost=lost)
+
+    def _opt_weapons_changed(self, keep_set=False, lost=None):
+        if not keep_set:
+            self.opt_wset.set(gear_opt.EACH)
+        allw = self.cfg.setdefault('opt_weapons', {})
+        allw[os.path.basename(self._opt_path)] = {'main': self.opt_main.get(), 'sub': self.opt_shield.get(), 'set': self.opt_wset.get()}
+        save_settings({'opt_weapons': allw})
+        for r in self.opt_rows:
+            r.pop('r', None)
+            r.pop('ideas', None)
+        self.opt_ctx = None
+        self._opt_fill()
+        self._opt_wnote_show(lost)
+        self.opt_status.config(text='Weapons changed: press "Look at every set" again.')
+
+    def _opt_wnote_show(self, lost=None):
+        w = self._opt_weapons()
+        why = gear_opt.weapons_ok(w)
+        if why:
+            text = '⚠ ' + why
+        elif lost:
+            text = f"not in your inventory or wardrobes: {', '.join(lost)} (that slot: each set's own)"
+        elif w:
+            text = 'every set is made with ' + ' + '.join(c['name'] for c in w.values() if c) + ' (not written into the sets)'
+        else:
+            text = ''
+        self.opt_wnote.config(text=text, foreground='#c0392b' if why or lost else '#555')
+
     def _opt_signature(self):
         path = self.opt_paths.get(self.opt_file.get()) or ''
         def stamp(p):
@@ -2108,7 +2209,8 @@ class App(tk.Tk):
             except OSError:
                 return None
         # (file, sub job, the file's time, his bags' time, the damage taken choice)
-        return (path, self.opt_sub.get(), stamp(path), stamp(os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')), bool(self.opt_cap.get()))
+        return (path, self.opt_sub.get(), stamp(path), stamp(os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')), bool(self.opt_cap.get()),
+                self.opt_main.get(), self.opt_shield.get())
 
     def _opt_fill(self):
         t = self.opt_tree
@@ -2186,17 +2288,20 @@ class App(tk.Tk):
         if self._heal_data is None:
             self._heal_data = healing.ItemData()
         job = self._opt_job()
-        bags = checks.load_bags(self.who.get()) or {}
-        cands, counts = doctor._owned_cands(self._opt_ld, job, bags, self.items)
+        cands, counts = self._opt_owned()
         targets = (self.cfg.get('dt_targets') or {}).get(os.path.basename(self._opt_path)) or {}
         self.opt_ctx = gear_opt.Ctx(self._opt_ld, job, self.opt_sub.get(), cands, counts, self.items, self._heal_data, targets=targets,
-                                    cap_dt=bool(self.opt_cap.get()))
+                                    cap_dt=bool(self.opt_cap.get()), weapons=self._opt_weapons())
         self._opt_sig = sig
         return self.opt_ctx
 
     def opt_run(self, wait=False):
         """Judge every set (in the background; the list fills in as it goes)."""
         if self._opt_busy or not self.opt_rows:
+            return
+        why = gear_opt.weapons_ok(self._opt_weapons())
+        if why:
+            self.opt_status.config(text=why + '.')
             return
         self._opt_busy, self._opt_stopping = True, False
         self.opt_go.config(state='disabled')

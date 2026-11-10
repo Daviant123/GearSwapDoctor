@@ -154,14 +154,92 @@ def focus_choices(row, job):
 
 
 # ------------------------------------------------------------------ judging
+class _Sets:
+    def __init__(self, sets):
+        self.sets = sets
+
+
+def with_weapons(set_gear, weapons):
+    """The set as it would be worn with the weapon / shield he picked ({'main': candidate or None, 'sub': ...}; None = the set's own)."""
+    if not weapons or not any(weapons.values()):
+        return set_gear
+    out = dict(set_gear)
+    for slot in ('main', 'sub'):
+        c = weapons.get(slot)
+        if c:
+            for k in [k for k in out if k.lower() == slot]:
+                del out[k]
+            out[slot] = {'name': c['name'], 'augments': list(c.get('augments') or [])}
+    return out
+
+
+def weapon_label(c):
+    a = ', '.join(c.get('augments') or [])
+    return c['name'] + (f' ({a[:40]})' if a else '')
+
+
+EACH = "Each set's own"
+
+
+DUAL = ('NIN', 'DNC')                                      # (a sub job that lets a PLD hold a second weapon)
+
+
+def weapon_choices(cands, job, sub=None):
+    """({label: candidate} for the main hand, {label: candidate} for the sub slot): his own gear this job can hold, each augmented copy once.
+    The sub slot: shields and grips, and one-handed weapons too when the sub job dual wields."""
+    mains, subs = {}, {}
+    dual = (sub or '').upper() in DUAL or (job or '').upper() in DUAL
+    for c in sorted(cands, key=lambda c: c['name']):
+        if healing.fits(c, 'main'):
+            mains.setdefault(weapon_label(c), c)
+        if healing.fits(c, 'sub') and (c.get('shield') or not healing.fits(c, 'main') or c.get('skill') == 0 or (dual and not c.get('two_handed'))):
+            subs.setdefault(weapon_label(c), c)
+    return mains, subs
+
+
+def find_label(choices, g):
+    """The label in choices for a piece as his file names it (long or short name, its augments if it has them); None when he doesn't have it."""
+    if not g:
+        return None
+    name, aug = g['name'].lower(), list(g.get('augments') or [])
+    hits = [k for k, c in choices.items() if name in (c['name'].lower(), (c.get('enl') or '').lower())]
+    for k in hits:
+        if list(choices[k].get('augments') or []) == aug:
+            return k
+    return hits[0] if hits else None
+
+
+def file_weapons(loaded):
+    """[(name, {'main': name, 'sub': name})]: the weapon sets of his file (sets.weapons.BurtgangAegis ...), to pick from."""
+    out = []
+    for s in loaded.sets:
+        if s['path'].startswith('sets.weapons.'):
+            g = {k.lower(): v for k, v in s['gear'].items()}
+            if g.get('main') or g.get('sub'):
+                out.append((s['path'][len('sets.weapons.'):], {k: g[k] for k in ('main', 'sub') if g.get(k)}))
+    return out
+
+
+def weapons_ok(weapons):
+    """'' or why the pair can't be held together (a two-handed weapon with a shield)."""
+    m, s = (weapons or {}).get('main'), (weapons or {}).get('sub')
+    if m and s and m.get('two_handed') and s.get('shield'):
+        return f"{m['name']} is two-handed: it can't be held with {s['name']} (pick a grip, or Each set's own)"
+    return ''
+
+
 class Ctx:
-    """What judging needs once per file: his gear (candidates and counts), the item data, his sub job, the HP of the sets he stands in."""
-    def __init__(self, loaded, job, sub, cands, counts, items, data, targets=None, cap_dt=False):
+    """What judging needs once per file: his gear (candidates and counts), the item data, his sub job, the HP of the sets he stands in.
+    weapons: {'main': candidate, 'sub': candidate} he picked (his request 2026-11-10: "the sets would be vastly different between weapons"): every set is
+    made with them (their stats count, the rest is built around them); they're never written into the sets. None: each set's own."""
+    def __init__(self, loaded, job, sub, cands, counts, items, data, targets=None, cap_dt=False, weapons=None):
         self.loaded, self.job, self.sub = loaded, (job or '').upper(), sub
         self.cands, self.counts, self.items, self.data = cands, counts, items, data
         self.targets = targets or {}
         self.cap_dt = cap_dt
-        self.ihp = pld.idle_hp(loaded, items, data, counts) if self.job == 'PLD' else None
+        self.weapons = weapons if weapons and any(weapons.values()) else None
+        sets = loaded if not self.weapons else _Sets([dict(s, gear=with_weapons(s['gear'], self.weapons)) for s in loaded.sets])
+        self.ihp = pld.idle_hp(sets, items, data, counts) if self.job == 'PLD' else None
         self._cache = {}
 
 
@@ -181,24 +259,30 @@ def judge(row, ctx, focus=None, build=True):
         return None
     focus = focus or row['focus']
     need = need_for(row, focus, ctx)
-    key = (row['judge'], focus, tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in row['gear'].items())),
+    gear = with_weapons(row['gear'], ctx.weapons)
+    key = (row['judge'], focus, tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in gear.items())),
            tuple(sorted(need.items())), row['path'].startswith('sets.buff'), build, ctx.ihp)
     if key in ctx._cache:
         return ctx._cache[key]
-    a = (row['path'], row['gear'], ctx.job, ctx.sub, ctx.cands, ctx.counts, ctx.items, ctx.data)
+    a = (row['path'], gear, ctx.job, ctx.sub, ctx.cands, ctx.counts, ctx.items, ctx.data)
+    keep = True if ctx.weapons else None                  # (his weapons stay put in every set)
     if row['judge'] == 'pld':
         r = pld.judge(*a, need=need, focus=focus, build=build, idle_hp=ctx.ihp)
         m0, m1 = r['now'], r['val']
     elif row['judge'] == 'idle':
-        r = idle.judge(*a, need=need, focus=focus, build=build)
+        r = idle.judge(*a, need=need, focus=focus, build=build, keep_weapons=keep)
         m0, m1 = r['now'], r['val']
     else:
-        r = job_sets.judge(*a, need=need, focus=focus, build=build)
+        r = job_sets.judge(*a, need=need, focus=focus, build=build, keep=keep)
         m0, m1 = r.get('main_now', r['now']), r.get('main_best', r['val'])
     gain = (m1 - m0) / abs(m0) * 100 if m0 else (100 if m1 > 0 else 0)
     if r['val'] <= r['now']:
         gain = 0
     fix = bool(need) and r.get('short_now', 0) > r.get('short', 0)
+    if ctx.weapons:
+        r['changes'] = {k: v for k, v in r['changes'].items() if k not in ('main', 'sub')}
+        r['notes'] = list(r['notes']) + ['made with ' + ' and '.join(c['name'] for c in ctx.weapons.values() if c)
+                                         + ' (your pick): they count in every set, but are not written into it']
     r = dict(r, gain=round(gain, 1), better=bool(r['changes']) and (gain >= 1 or fix), need=need, dt_fix=fix)
     ctx._cache[key] = r
     return r

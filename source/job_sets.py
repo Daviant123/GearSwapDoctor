@@ -873,7 +873,7 @@ def _locked(cur, data):
 ONTOP = ('Ability', 'Treasure Hunter', 'Sneak Attack', 'Trick Attack', 'Doom')
 
 
-def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus=None, build=True, base=None, ideas=None):
+def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus=None, build=True, base=None, ideas=None, keep=None):
     """One set, the same shape as pld.judge / pup.judge. base: healing.defaults(job, sub) for cures (worked out when None).
     ideas: (all candidates for the job) to say which gear he doesn't own would do better."""
     job, sub = (job or '').upper(), (sub or '').upper()
@@ -898,6 +898,8 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     hk = FOCUS[focus].get('healing')
     import gs_create
     keep_weapons = job not in gs_create.MAGES or focus in ONTOP or focus.startswith(('Phantom', 'Quick Draw', 'Ranged', 'Snapshot', 'Steps', 'Jump'))
+    if keep is not None:                                   # (he picked the weapons the sets are made with: Gear Optimization)
+        keep_weapons = keep
     if keep_weapons:
         notes.append('weapons kept: a new weapon throws away TP')
     locked = _locked(cur, data)

@@ -28,6 +28,7 @@ ENMITY_IDLE = 70               # +100 with Crusade: the 50 % cap on hate lost wh
 KEEP_CAP = 50
 FAST_CAP, POTENCY_CAP, RECEIVED_CAP = 80, 50, 30
 HP_GAP = 200
+TOTAL_DT_CAP = 87.5           # (BG Wiki Community PLD Guide: Aegis MDT II -50 %, max player MDT -87.5 %; Burtgang breaks the PDT cap to -68 %)
 MEVA_TANK = 550
 
 RX = [(k, re.compile(rx)) for k, rx in [
@@ -242,6 +243,7 @@ def numbers(gear, focus=None):
                 t[k] = t.get(k, 0) + v
             hp += pre[2]
     pd, md = healing.dt_totals(t)
+    pd, md = min(TOTAL_DT_CAP, pd), min(TOTAL_DT_CAP, md)      # (all of it stops at 87.5 %: with Aegis' MDT II -50 %, 37.5 % more from gear is enough)
     enmity = t.get('enmity', 0) + t.get('u_enmity', 0)
     skill = ENH_SKILL + t.get('enh_skill', 0)
     n = {'phys': pd, 'magic': md, 'enmity': enmity, 'keep': t.get('enm_keep', 0), 'sird': t.get('sird', 0) + SIRD_MERITS,
