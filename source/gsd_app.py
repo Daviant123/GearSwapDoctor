@@ -56,7 +56,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.22.0'
+VERSION = '2.22.1'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -1955,12 +1955,16 @@ class App(tk.Tk):
         t.tag_configure('better', foreground='#1b6e20')
         t.tag_configure('new', foreground='#b36b00')
         t.tag_configure('other', foreground='#888')
+        # (his request 2026-11-10 "cant select all": the Write header ticks / unticks every set, a group's box its sets, Ctrl+A all)
+        t.heading('write', text='Write ☐', command=self._opt_toggle_all)
         sb = ttk.Scrollbar(left, orient='vertical', command=t.yview)
         t.configure(yscrollcommand=sb.set)
         t.pack(side='left', fill='both', expand=True)
         sb.pack(side='right', fill='y')
         t.bind('<<TreeviewSelect>>', lambda e: self.opt_show())
         t.bind('<Button-1>', self._opt_click, add='+')
+        t.bind('<Control-a>', lambda e: (self._opt_set_ticks(self._opt_tickable(), True), 'break')[1])
+        t.bind('<Control-A>', lambda e: (self._opt_set_ticks(self._opt_tickable(), True), 'break')[1])
         self.opt_tree = t
 
         right = ttk.Frame(body)
@@ -2016,7 +2020,11 @@ class App(tk.Tk):
 
         low = ttk.Frame(tab)
         low.pack(fill='x', pady=(6, 0))
-        ttk.Button(low, text='Tick every better set', command=self._opt_tick_all).pack(side='left')
+        b = ttk.Button(low, text='Tick all', command=lambda: self._opt_set_ticks(self._opt_tickable(), True))
+        b.pack(side='left')
+        ToolTip(b, 'Every set that can be better from your gear, and the missing sets that can be made. Also: click the Write header, '
+                   'or a group\'s box to tick just that group.')
+        ttk.Button(low, text='Tick every better set', command=self._opt_tick_all).pack(side='left', padx=(4, 0))
         ttk.Button(low, text='Untick all', command=self._opt_untick).pack(side='left', padx=4)
         self.opt_write_btn = ttk.Button(low, text='Write the ticked sets (0)', style='Big.TButton', command=self.opt_write_ticked, state='disabled')
         self.opt_write_btn.pack(side='left', padx=8)
@@ -2024,6 +2032,7 @@ class App(tk.Tk):
         ttk.Label(low, text='Weapons and shield always stay. In game: //gs reload after writing.', foreground='#777').pack(side='left', padx=8)
 
         self.opt_paths, self.opt_rows, self.opt_iid, self.opt_ticked = {}, [], {}, set()
+        self.opt_group = {}
         self.opt_ctx, self.opt_cur, self._opt_sig = None, None, None
         self._opt_dirty, self._opt_busy, self._opt_stopping = True, False, False
         self.nb.bind('<<NotebookTabChanged>>', lambda e: self.opt_load() if self._opt_dirty and
@@ -2105,7 +2114,7 @@ class App(tk.Tk):
         t = self.opt_tree
         sel = self.opt_cur['path'] if self.opt_cur else None
         t.delete(*t.get_children())
-        self.opt_iid = {}
+        self.opt_iid, self.opt_group = {}, {}
         order = gear_opt.role(self._opt_job())['order']
         groups = {}
         for r in self.opt_rows:
@@ -2116,7 +2125,10 @@ class App(tk.Tk):
             judged = [r for r in rows if r['judge'] in ('pld', 'idle', 'job')]
             nb = sum(1 for r in rows if r.get('r') and r['r'].get('better'))
             label = f"{g}  ({len(rows)})" + (f"  - {nb} better" if nb else '')
-            gid = t.insert('', 'end', text=label, open=bool(judged), tags=('group',))
+            can = self._opt_tickable(rows)
+            gid = t.insert('', 'end', text=label, open=bool(judged), tags=('group',),
+                           values=(('☑' if all(r['path'] in self.opt_ticked for r in can) else '☐') if can else '', '', '', '', ''))
+            self.opt_group[gid] = rows
             for r in rows:
                 iid = t.insert(gid, 'end', text=('＋ ' if r.get('new') else '') + r['path'][len('sets.'):], values=self._opt_values(r),
                                tags=self._opt_tags(r))
@@ -2127,6 +2139,7 @@ class App(tk.Tk):
             t.selection_set(again)
             t.see(again)
         self._opt_tick_label()
+        self._opt_marks()
 
     def _opt_values(self, r):
         res = r.get('r')
@@ -2260,17 +2273,52 @@ class App(tk.Tk):
                                state='normal' if self._opt_hp else 'disabled')
 
     def _opt_click(self, e):
-        """A click in the Write column ticks / unticks a set."""
+        """A click in the Write column ticks / unticks a set; on a group's row, every set of the group."""
         t = self.opt_tree
         if t.identify_region(e.x, e.y) != 'cell' or t.identify_column(e.x) != '#1':
             return
         iid = t.identify_row(e.y)
+        if iid in self.opt_group:
+            can = self._opt_tickable(self.opt_group[iid])
+            if can:
+                self._opt_set_ticks(can, not all(r['path'] in self.opt_ticked for r in can))
+            return 'break'
         r = self.opt_iid.get(iid)
         if not r or not self._opt_values(r)[0]:
             return
         self.opt_ticked ^= {r['path']}
         self._opt_refresh_row(r)
         self._opt_tick_label()
+        self._opt_marks()
+
+    def _opt_tickable(self, rows=None):
+        """The sets that can be written: better from his gear, or a missing set that can be made."""
+        return [r for r in (self.opt_rows if rows is None else rows) if self._opt_values(r)[0]]
+
+    def _opt_set_ticks(self, rows, on):
+        for r in rows:
+            if on:
+                self.opt_ticked.add(r['path'])
+            else:
+                self.opt_ticked.discard(r['path'])
+            self._opt_refresh_row(r)
+        self._opt_tick_label()
+        self._opt_marks()
+
+    def _opt_toggle_all(self):
+        """The Write header: tick every set that can be written, or untick them all when they all are."""
+        can = self._opt_tickable()
+        if can:
+            self._opt_set_ticks(can, not all(r['path'] in self.opt_ticked for r in can))
+
+    def _opt_marks(self):
+        """The group rows' and the header's boxes show whether all their sets are ticked."""
+        t = self.opt_tree
+        for gid, rows in self.opt_group.items():
+            can = self._opt_tickable(rows)
+            t.set(gid, 'write', ('☑' if all(r['path'] in self.opt_ticked for r in can) else '☐') if can else '')
+        can = self._opt_tickable()
+        t.heading('write', text='Write ' + ('☑' if can and all(r['path'] in self.opt_ticked for r in can) else '☐'))
 
     def _opt_tick_label(self):
         self.opt_ticked &= {r['path'] for r in self.opt_rows if self._opt_values(r)[0]}
@@ -2285,8 +2333,7 @@ class App(tk.Tk):
         self._opt_fill()
 
     def _opt_untick(self):
-        self.opt_ticked = set()
-        self._opt_fill()
+        self._opt_set_ticks(list(self.opt_rows), False)
 
     def opt_show(self):
         sel = self.opt_tree.selection()
