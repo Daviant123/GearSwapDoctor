@@ -458,6 +458,8 @@ def _allowed(gear, slot, c, counts, job, sub):
         used = sum(1 for s, x in gear.items() if s != slot and x and x['name'] == c['name'])
         if used + 1 > counts.get(c['name'], 1):
             return False
+    if slot not in ('main', 'sub'):          # (only a weapon change can make the weapons wrong: a set with a grip and no weapon can still change its earrings)
+        return True
     other = dict(gear)
     other[slot] = c
     m, s_ = other.get('main'), other.get('sub')

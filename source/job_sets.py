@@ -37,6 +37,8 @@ RX = [(k, re.compile(rx)) for k, rx in [
     ('crit_dmg', r'Critical hit damage ?\+(\d+)'), ('bp_dmg', r'"Blood Pact" damage ?\+(\d+)'), ('ready_delay', r'"Ready" (?:ability )?delay ?-(\d+)|Ready recast ?-(\d+)'),
     ('ready_tp', r'"Ready" TP Bonus ?\+(\d+)'), ('song_recast', r'Song recast delay ?-(\d+)'), ('nin_recast', r'Ninjutsu recast delay ?-(\d+)'),
     ('utsu', r'"Utsusemi" ?\+(\d+)'), ('step_acc', r'"Steps?" accuracy ?\+(\d+)'), ('jump_tp', r'Jumps? TP Bonus ?\+(\d+)|"Jump" TP Bonus ?\+(\d+)'),
+    ('ds_pot', r'"Dread Spikes" (?:potency|absorption|effect) ?\+(\d+)%'), ('absorbtp', r'"Absorb-TP" (?:effect|absorbed) ?\+(\d+)'),
+    ('absorb_pot', r'"Absorb" effect ?\+(\d+)%'),
     ('absorb_dur', r'"Absorb" effect duration ?\+(\d+)'), ('crit', r'Critical hit rate ?\+(\d+)'), ('charm', r'"Charm" ?\+(\d+)'), ('blue_cast_fast', r'Blue magic spellcasting time ?-(\d+)'),
 ]]
 # a word in quotes that is a stat, not an ability (so it doesn't count as "boosts the ability")
@@ -95,11 +97,20 @@ def boosts(c, ability):
     q = c.get('quoted') or {}
     if a in q:
         return q[a]
+    names = (c.get('name') or '').lower(), (c.get('enl') or '').lower()
+    for piece, ab in RELIC.items():                 # (a relic whose text doesn't name the ability: its hidden augment does)
+        if norm(ab) == a and any(n.startswith(piece) for n in names):
+            return 1
     for fam in FAMILY:
         if a.endswith(fam) and fam in q:
             return q[fam]
     return 0
 
+
+# relic pieces that boost an ability with a hidden augment, so their item text doesn't say so (2026-11-10 research: BG Wiki Community Blue Mage Guide,
+# Community Corsair Guide). PLD's are in pld.JA_GEAR.
+RELIC = {'luhlaza charuqs': 'Diffusion', 'luh. charuqs': 'Diffusion', 'luhlaza bazubands': 'Azure Lore', 'luh. bazubands': 'Azure Lore',
+         'lanun bottes': 'Wild Card', 'lanun trews': 'Snake Eye', 'lanun gants': 'Fold'}
 
 FAMILY = ('samba', 'step', 'steps', 'jig', 'jump', 'waltz', 'flourish', 'flourishes', 'maneuver', 'roll', 'rune', 'ward', 'effusion')
 
@@ -191,11 +202,15 @@ FOCUS = {
     # dark magic
     'Drain and Aspir': {'pts': {'drain': 6, 'dark_skill': 2, 'macc': 1, 'INT': 0.3, 'fast': 0.2}, 'show': ['drain', 'dark_skill', 'macc'],
                         'how': '"Drain" and "Aspir" potency first, then Dark magic skill (they drain more with it), magic accuracy.'},
-    'Absorb': {'pts': {'macc': 3, 'dark_skill': 1.5, 'absorb_dur': 2, 'INT': 0.4, 'macc_skill': 2}, 'show': ['macc', 'dark_skill', 'absorb_dur'],
+    'Absorb': {'pts': {'macc': 3, 'dark_skill': 1.5, 'absorb_dur': 2, 'absorb_pot': 2, 'INT': 0.4, 'macc_skill': 2}, 'show': ['macc', 'dark_skill', 'absorb_dur'],
                'how': 'Absorb spells: magic accuracy (a resist takes nothing), Dark skill, Absorb duration.'},
     'Stun': {'pts': {'macc': 3, 'dark_skill': 1.5, 'INT': 0.3, 'fast': 1, 'haste': 1, 'macc_skill': 2}, 'show': ['macc', 'dark_skill', 'fast'],
              'how': 'Stun: magic accuracy and Dark skill; Fast Cast and haste make it ready again sooner.'},
-    'Dread Spikes': {'pts': {'HP': 1, 'dark_skill': 0.5, 'phys': 2}, 'show': ['HP'], 'how': 'Dread Spikes absorbs a share of your max HP: HP first.'},
+    'Dread Spikes': {'pts': {'ds_absorb': 0.05, 'phys': 1, 'magic': 0.5, 'fast': 0.1}, 'show': ['ds_absorb', 'hp', 'ds_pot'],
+                     'how': 'Dread Spikes absorbs up to your max HP when cast x 0.5 x (1 + Dread Spikes potency): Heathen\'s Cuirass +3 +55 %, '
+                            'Crepuscular Scythe +50 % (BG Wiki). Max HP and potency first.'},
+    'Absorb-TP': {'pts': {'absorbtp': 4, 'macc': 3, 'dark_skill': 1, 'absorb_pot': 2, 'macc_skill': 2, 'INT': 0.3}, 'show': ['absorbtp', 'macc', 'dark_skill'],
+                  'how': '"Absorb-TP" effect (Heathen\'s Gauntlets +3 +30 %), then magic accuracy and Dark magic skill.'},
     'Dark magic': {'pts': {'dark_skill': 3, 'macc': 1, 'INT': 0.3}, 'show': ['dark_skill', 'macc'], 'how': 'Dark magic skill (Endark, Bio, Dread Spikes ...).'},
     # divine / enmity
     'Flash': {'pts': {'enmity': 4, 'macc': 1.5, 'div_skill': 1, 'phys': 0.5, 'magic': 0.5}, 'show': ['enmity', 'macc'],
@@ -262,6 +277,8 @@ FOCUS = {
     # blue magic (wsdist does the damage spells: magic.py)
     'Blue magic: skill': {'pts': {'blue_skill': 3, 'fast': 0.2, 'conserve': 0.2, 'phys': 0.2, 'magic': 0.2}, 'show': ['blue_skill'],
                           'how': 'Diamondhide, Metallic Body, Occultation, Magic Barrier, Barrier Tusk ...: Blue magic skill makes them stronger.'},
+    'Blue magic: White Wind': {'pts': {'hp': 0.06, 'potency': 3, 'MND': 0.2, 'enmity_down': 0.5, 'phys': 0.3, 'magic': 0.3}, 'show': ['hp', 'potency'],
+                               'how': 'White Wind heals by your max HP (party, AoE): HP first, then Cure potency.'},
     'Blue magic: cures': {'pts': {'potency': 8, 'MND': 1, 'VIT': 0.3, 'blue_skill': 0.5, 'enmity_down': 0.5, 'received': 0}, 'show': ['potency', 'MND'],
                           'how': 'Cure potency (to 50 %), MND, then Blue magic skill (Magic Fruit, Wild Carrot, Healing Breeze, White Wind ...).'},
     'Blue magic: accuracy': {'pts': {'macc': 3, 'blue_skill': 1.5, 'MND': 0.3, 'INT': 0.3, 'CHR': 0.2, 'macc_skill': 2}, 'show': ['macc', 'blue_skill'],
@@ -297,7 +314,8 @@ LABEL = {'fast': 'Fast Cast', 'quick': 'Quick Magic', 'haste': 'gear haste', 'si
          'magic': 'magic damage taken', 'enmity': 'enmity', 'enh_dur': 'enhancing duration', 'enh_skill': 'Enhancing skill', 'refresh_pot': 'Refresh potency',
          'ss': 'Stoneskin', 'MND': 'MND', 'INT': 'INT', 'CHR': 'CHR', 'AGI': 'AGI', 'DEX': 'DEX', 'VIT': 'VIT', 'aquaveil': 'Aquaveil gear', 'phalanx': 'Phalanx',
          'macc': 'magic accuracy', 'enf_skill': 'Enfeebling skill', 'ele_skill': 'Elemental skill', 'drain': 'Drain / Aspir potency', 'dark_skill': 'Dark skill',
-         'absorb_dur': 'Absorb duration', 'HP': 'HP', 'div_skill': 'Divine skill', 'songs': 'All songs', 'song_one': "the song's own", 'song_dur': 'song duration',
+         'absorb_dur': 'Absorb duration', 'ds_absorb': 'Dread Spikes absorbs (HP)', 'ds_pot': 'Dread Spikes potency', 'absorbtp': '"Absorb-TP" effect',
+         'absorb_pot': '"Absorb" effect', 'hp': 'HP', 'HP': 'HP', 'div_skill': 'Divine skill', 'songs': 'All songs', 'song_one': "the song's own", 'song_dur': 'song duration',
          'sing': 'Singing skill', 'snap': 'Snapshot', 'rapid': 'Rapid Shot', 'racc': 'ranged accuracy', 'ratt': 'ranged attack', 'stp': 'Store TP',
          'pr': 'Phantom Roll', 'pr_dur': 'roll duration', 'ja': 'pieces for it', 'qd': 'Quick Draw damage', 'matk': 'Magic Atk. Bonus', 'th': 'Treasure Hunter',
          'bp1': 'Blood Pact delay', 'bp2': 'Blood Pact delay II', 'ava_att': 'avatar attack', 'ava_acc': 'avatar accuracy', 'bp_dmg': 'Blood Pact damage',
@@ -306,7 +324,7 @@ LABEL = {'fast': 'Fast Cast', 'quick': 'Quick Magic', 'haste': 'gear haste', 'si
          'bell': 'Handbell skill', 'indi_dur': 'Indicolure duration', 'utsu': 'Utsusemi +', 'nin_skill': 'Ninjutsu skill', 'blue_skill': 'Blue magic skill',
          'potency': 'Cure potency', 'step_acc': 'Step accuracy', 'acc': 'accuracy', 'att': 'attack', 'jump_tp': 'jump TP bonus', 'crit_dmg': 'critical hit damage',
          'crit': 'critical hit rate', 'holy_water': 'Holy Water', 'cursna_rec': 'Cursna received', 'charm': 'Charm', 'mbb': 'Magic burst damage', 'nin_dmg': 'Ninjutsu damage'}
-PCT = {'crit', 'fast', 'quick', 'haste', 'sird', 'phys', 'magic', 'enh_dur', 'song_dur', 'snap', 'potency', 'crit_dmg', 'indi_dur'}
+PCT = {'ds_pot', 'absorbtp', 'absorb_pot', 'crit', 'fast', 'quick', 'haste', 'sird', 'phys', 'magic', 'enh_dur', 'song_dur', 'snap', 'potency', 'crit_dmg', 'indi_dur'}
 
 
 # ------------------------------------------------------------------ what a set is for
@@ -376,6 +394,9 @@ def handled_elsewhere(path, job):
     return False
 
 
+ACC_ENF = ('sleep', 'sleepga', 'bind', 'break', 'breakga', 'silence', 'dispel', 'gravity', 'gravity ii')
+
+
 def _spell_focus(name, job):
     """What a set for one spell is for, from the game's spell list."""
     sp = spells().get(norm(name))
@@ -400,7 +421,7 @@ def _spell_focus(name, job):
     if skill == 'enfeebling':
         if low in SKILL_ENF:
             return 'Enfeebling (skill)'
-        if low.startswith(('dia', 'inundation')):
+        if low.startswith(('dia', 'inundation')) or low.split(' ')[0] in ACC_ENF:
             return 'Enfeebling (accuracy)'
         if low.split(' ')[0] in MND_ENF:
             return 'Enfeebling (MND)'
@@ -414,6 +435,8 @@ def _spell_focus(name, job):
     if skill == 'dark':
         if low.startswith(('drain', 'aspir')):
             return 'Drain and Aspir'
+        if low == 'absorb-tp':
+            return 'Absorb-TP'
         if low.startswith('absorb'):
             return 'Absorb'
         if low == 'stun':
@@ -439,6 +462,8 @@ def _spell_focus(name, job):
     if skill == 'blue':
         if low in BLU_SKILL:
             return 'Blue magic: skill'
+        if low == 'white wind':
+            return 'Blue magic: White Wind'
         if low in BLU_CURE:
             return 'Blue magic: cures'
         if low in BLU_BUFF or targets & 1 and not targets & 32:
@@ -472,6 +497,8 @@ def ability_of(path):
                 return max(pre, key=len) if pre else parts[i + 1]
         if p in ('samba', 'step', 'jig', 'jump') and i == len(low) - 1 and i >= 2:      # (sets.precast.Samba: any Samba)
             return parts[i].capitalize()
+        if p.startswith('fold') and i >= 1:                       # (a COR's sets.precast.FoldDoubleBust)
+            return 'Fold'
     return None
 
 
@@ -494,6 +521,8 @@ def focus_for(path, job=None):
         what = rest[1]
         if what == 'doom':
             return 'Doom'
+        if what.startswith('composure') and job == 'RDM':          # (Composure + Lethargy pieces: longer enhancing magic on others)
+            return 'Enhancing duration'
         if what in ('sneak attack', 'sneakattack', 'sa'):
             return 'Sneak Attack'
         if what in ('trick attack', 'trickattack', 'ta'):
@@ -512,6 +541,8 @@ def focus_for(path, job=None):
                 'cursna': 'Cursna', 'regen': 'Regen', 'waltz': 'Waltz'}[hk[0]]
     if rest[0] in ('enmity',) or (rest[0] == 'bluemagic' and 'enmity' in rest):
         return 'Spell, not interrupted' if 'sird' in rest else 'Enmity'
+    if job == 'COR' and any(x.startswith('fold') for x in rest):     # (sets.precast.FoldDoubleBust: Lanun Gants for Fold)
+        return 'Ability'
     if rest[0] == 'jump' or (ab and ab.lower().endswith('jump')):
         return 'Jump'
     if rest[0] == 'precast':
@@ -601,6 +632,8 @@ def focus_for(path, job=None):
         if what == ['ninjutsu']:
             return 'Spell recast'
         if rest[0] == 'bluemagic' or 'blue magic' in wj or job == 'BLU':
+            if 'white wind' in wj or 'whitewind' in wj:
+                return 'Blue magic: White Wind'
             if any(x in wj for x in BLU_CURE):
                 return 'Blue magic: cures'
             if any(x in wj for x in BLU_SKILL):
@@ -725,6 +758,7 @@ def numbers(gear, focus, ctx=None):
     n['song_one'] = sum(boosts(c, song) for c in gear.values() if c) if song else 0
     n['ability'] = a
     n['hp'] = sum(pld.hp_of(c) for c in gear.values() if c)
+    n['ds_absorb'] = round((pld.BASE_HP + n['hp']) * 0.5 * (1 + t.get('ds_pot', 0) / 100))
     return n
 
 
@@ -930,6 +964,8 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
                        short=healing.shortfall(healing.totals(best), need or None))
         return out
     pool = useful(cands, focus, ctx)
+    if {k.lower() for k in set_gear} & {'range', 'ranged'} and 'ammo' not in {k.lower() for k in set_gear}:
+        pool = [c for c in pool if not healing.fits(c, 'ammo')]     # (a bow or gun in the range slot: other ammo would take it off, as idle.py does)
     spec = (focus, ctx)
     n0 = numbers(cur, focus, ctx)
     v0 = value(cur, spec)

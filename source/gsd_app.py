@@ -38,6 +38,7 @@ import paths    # noqa: E402
 import pld      # noqa: E402
 import job_sets  # noqa: E402
 import gear_opt  # noqa: E402
+import job_guides  # noqa: E402
 import pup      # noqa: E402
 import real_fights  # noqa: E402
 import rema     # noqa: E402
@@ -56,7 +57,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.23.0'
+VERSION = '2.24.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2039,6 +2040,10 @@ class App(tk.Tk):
         self.opt_checks.config(state='disabled')
         self.opt_hp_btn = ttk.Button(three, text='Put HP pieces on first', command=self.opt_hp_order, state='disabled')
         self.opt_hp_btn.pack(anchor='w', pady=(4, 0))
+        self.opt_names_btn = ttk.Button(three, text='Fix the set names', command=self.opt_fix_names, state='disabled')
+        self.opt_names_btn.pack(anchor='w', pady=(4, 0))
+        ToolTip(self.opt_names_btn, 'A set named for a spell or ability that does not exist (a typo) is never used by GearSwap. This renames it to the '
+                                    'real name, after showing you the change (with a backup).')
         ToolTip(self.opt_hp_btn, "GearSwap puts the highest 'priority' on first: HP pieces first, so a swap never drops your HP on the way "
                                  "(the guides: HP management is one of a tank's most important jobs).")
 
@@ -2220,6 +2225,8 @@ class App(tk.Tk):
         order = gear_opt.role(self._opt_job())['order']
         groups = {}
         for r in self.opt_rows:
+            if gear_opt.nothing_to_add(r):            # (a missing set his gear has nothing for: not offered)
+                continue
             groups.setdefault(r['group'], []).append(r)
         again = None
         for g in sorted(groups, key=lambda g: order.index(g) if g in order else 99):
@@ -2376,6 +2383,20 @@ class App(tk.Tk):
                 self._opt_hp = {}
         self.opt_hp_btn.config(text=f'Put HP pieces on first ({len(self._opt_hp)} sets)' if self._opt_hp else 'HP pieces already go on first',
                                state='normal' if self._opt_hp else 'disabled')
+        if self._opt_job() != 'PLD':
+            self.opt_hp_btn.pack_forget()
+        elif not self.opt_hp_btn.winfo_ismapped():
+            self.opt_hp_btn.pack(anchor='w', pady=(4, 0), before=self.opt_names_btn)
+        try:
+            self._opt_names = job_guides.name_fixes(self._opt_ld) if getattr(self, '_opt_ld', None) is not None else []
+        except Exception:
+            self._opt_names = []
+        self.opt_names_btn.config(text=f'Fix the set names ({len(self._opt_names)})' if self._opt_names else 'Set names are all real spells / abilities',
+                                  state='normal' if self._opt_names else 'disabled')
+        if self._opt_names and not checks_:
+            tx.config(state='normal')
+            tx.insert('end', '\n✖ ' + job_guides.rename_text(self._opt_names) + '\n', 'bad')
+            tx.config(state='disabled')
 
     def _opt_click(self, e):
         """A click in the Write column ticks / unticks a set; on a group's row, every set of the group."""
@@ -2455,10 +2476,8 @@ class App(tk.Tk):
         tx = self.opt_text
         tx.config(state='normal')
         tx.delete('1.0', 'end')
-        f = r.get('picked') or r['focus']
-        why = gear_opt.WHY.get(f, '') if r['judge'] == 'pld' else ''
         tx.insert('end', 'What it is for\n', 'h')
-        tx.insert('end', (why or r['why'] or '-') + '\n\n')
+        tx.insert('end', (gear_opt.why_text(r, job) or '-') + '\n\n')
         if r.get('error'):
             tx.insert('end', 'Could not judge it: ' + r['error'] + '\n')
         elif res:
@@ -2585,6 +2604,12 @@ class App(tk.Tk):
     def opt_write_ticked(self):
         rows = [r for r in self.opt_rows if r['path'] in self.opt_ticked and r.get('r')]
         self._opt_write(rows)
+
+    def opt_fix_names(self):
+        if getattr(self, '_opt_names', None):
+            if self._apply({self._opt_path: job_guides.rename_edits(self._opt_names)}) is not False:
+                self.loaded.pop(self._opt_path, None)
+                self.opt_load(keep_sub=True)
 
     def opt_hp_order(self):
         if getattr(self, '_opt_hp', None):

@@ -13,6 +13,7 @@ Nothing is written here: the tab hands edits to the app's _apply (a list of what
 """
 import healing
 import idle
+import job_guides
 import job_sets
 import pld
 
@@ -38,7 +39,16 @@ GENERIC = {'title': 'Every set, judged by what it is for',
 
 
 def role(job):
-    return ROLE.get((job or '').upper(), GENERIC)
+    job = (job or '').upper()
+    return ROLE.get(job) or job_guides.ROLE.get(job) or GENERIC
+
+
+def why_text(row, job):
+    """What a set is for, in the guide's words (the job's own text when there is one)."""
+    f = row.get('picked') or row['focus']
+    if row['judge'] == 'pld':
+        return WHY.get(f, '') or row['why']
+    return job_guides.why(job, f) or ((job_sets.FOCUS.get(f) or {}).get('how', '') if row['judge'] == 'job' and f else '') or row['why']
 
 
 # what each PLD intention means, in plain words (shown when a set is picked)
@@ -82,7 +92,10 @@ def _group_pld(focus):
     return 'Spells while being hit'
 
 
-def _group_job(focus):
+def _group_job(focus, job=None, path=''):
+    g = job_guides.group_of(focus, job, path)
+    if g:
+        return g
     f = (focus or '').lower()
     if f.startswith(('fast cast', 'spell recast')):
         return 'Casting fast'
@@ -120,15 +133,23 @@ def classify(loaded, job):
                        why=('Weapon skill damage, keeping the damage taken the set has: a tank still has to live through it '
                             '(the Community PLD Guide\'s weapon skill sets keep 39-43 % damage taken). wsdist judges damage: "Open in Build a set".')
                        if job == 'PLD' else 'Weapon skill damage: wsdist judges it. "Open in Build a set".')
+        elif job != 'PLD' and _nuke(p, job):
+            k = _nuke(p, job)
+            row.update(group='Nukes and blue magic damage', judge='wsdist',
+                       why=('Physical blue magic: damage from the spell\'s own stats (STR / DEX / VIT ...) and attack, judged by wsdist.' if k[0] == 'bluephys' else
+                            'Magical blue magic: Magic Atk. Bonus, magic damage, INT / MND, magic burst bonus (40 % cap), judged by wsdist.' if k[0] == 'blue' else
+                            'A nuke (or magic burst): Magic Atk. Bonus, magic damage, INT, magic burst bonus (40 % cap), judged by wsdist.')
+                       + ' "Open in Build a set".')
         elif job == 'PLD' and cov.get(p) == 'tp':
             row.update(group='Fighting (damage)', judge='wsdist',
                        why='A Paladin tanks: this is for when you are not the tank (fodder, a Sortie boss you melee). wsdist judges it, keeping its damage taken.')
         elif job != 'PLD' and job_sets.takes(p, job):
             f = job_sets.focus_for(p, job)
-            row.update(group=_group_job(f), focus=f, judge='job', why=(job_sets.FOCUS.get(f) or {}).get('how', ''))
+            row.update(group=_group_job(f, job, p), focus=f, judge='job', why=job_guides.why(job, f) or (job_sets.FOCUS.get(f) or {}).get('how', ''))
         elif idle.is_idle(p) and not (job == 'PLD' and cov.get(p) == 'small'):
             f = idle.focus_for(p)
-            row.update(group='Standing (Refresh, town)' if job == 'PLD' else ('Staying alive' if 'DT' in (f or '') else 'Standing (Refresh, town)'),
+            row.update(group='Standing (Refresh, town)' if job == 'PLD' else ('Staying alive' if f in ('Damage taken', 'Magic evasion', 'Balanced')
+                                                                              else 'Standing (Refresh, town)'),
                        focus=f, judge='idle', why=f'Standing still: {f}.')
         elif cov.get(p) == 'healing' or 'waltz' in p.lower():
             row.update(group='Healing tab', why='Waltz / Cure received: the Healing tab builds these.')
@@ -140,6 +161,14 @@ def classify(loaded, job):
                 row['why'] = 'an add-on set for an item or two (Capacity, Reraise, MP ...): left as it is'
         rows.append(row)
     return rows
+
+
+def _nuke(path, job):
+    import magic
+    try:
+        return magic.kind_of(path, job)
+    except Exception:
+        return None
 
 
 def focus_choices(row, job):
@@ -261,7 +290,8 @@ def judge(row, ctx, focus=None, build=True):
     need = need_for(row, focus, ctx)
     gear = with_weapons(row['gear'], ctx.weapons)
     key = (row['judge'], focus, tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in gear.items())),
-           tuple(sorted(need.items())), row['path'].startswith('sets.buff'), build, ctx.ihp)
+           tuple(sorted(need.items())), row['path'].startswith('sets.buff'), build, ctx.ihp,
+           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None)
     if key in ctx._cache:
         return ctx._cache[key]
     a = (row['path'], gear, ctx.job, ctx.sub, ctx.cands, ctx.counts, ctx.items, ctx.data)
@@ -386,10 +416,20 @@ def ideas(row, r, ctx, every, n=3):
 
 # ------------------------------------------------------------------ the guides' checks on the whole file
 def file_checks(rows, ctx):
-    """[(level, text)] level 'bad' / 'warn' / 'ok': the guides' rules on the file as a whole (Paladin)."""
-    if ctx.job != 'PLD':
-        return []
+    """[(level, text)] level 'bad' / 'warn' / 'ok': the guides' rules on the file as a whole (Paladin here; RDM, COR, BLU, DRK in job_guides)."""
     out = []
+    fixes = job_guides.name_fixes(ctx.loaded) if ctx.loaded is not None else []
+    if fixes:
+        out.append(('bad', job_guides.rename_text(fixes)))
+    if ctx.job != 'PLD':
+        judged = [r for r in rows if r.get('r') and r['judge'] in ('job', 'idle')]
+        if not judged:
+            return out
+        out += job_guides.file_checks(rows, ctx)
+        better = [r for r in judged if r['r'].get('better')]
+        out.append(('warn', f"{len(better)} sets can be better from gear you already own: tick them on the left and press Write.") if better else
+                   ('ok', 'Every judged set is already the best your gear can do for what it is for.'))
+        return out
     judged = [r for r in rows if r.get('r') and r['judge'] == 'pld']
     if not judged:
         return out
@@ -466,13 +506,37 @@ def _norm(p):
 def missing(loaded, job):
     """[{path, group, focus, judge, why, gear: {}, new: True}] for the sets the guides list that the file doesn't have."""
     have = {_norm(s['path']) for s in loaded.sets}
+    job = (job or '').upper()
     out = []
-    for path, focus, why in WANTED.get((job or '').upper(), []):
+    if job != 'PLD' and not job_guides.picks_by_name(loaded):
+        return out                    # (a file with its own set names - sets.BlueMagic.*, sets.JA.* - wouldn't use a set named the usual way)
+    # (a set the "Fix the set names" button would make, or one the file has under its own name - sets.precast.FoldDoubleBust - counts as there)
+    have |= {_norm(new) for old, new, w, h in job_guides.name_fixes(loaded)}
+    squashed = {_norm(s['path']).replace(' ', '').replace("'", '') for s in loaded.sets}
+    for path, focus, why in WANTED.get(job) or job_guides.WANTED.get(job, []):
         if _norm(path) in have:
             continue
-        out.append({'path': path, 'gear': {}, 'group': _group_pld(focus), 'focus': focus, 'judge': 'pld', 'new': True,
-                    'why': f"Not in your file yet: {why}. " + WHY.get(focus, '')})
+        last = _norm(path).split('.')[-1].replace(' ', '').replace("'", '')
+        if job != 'PLD' and focus == 'Ability' and any(x.split('.')[-1].startswith(last) for x in squashed):
+            continue
+        if job == 'PLD':
+            out.append({'path': path, 'gear': {}, 'group': _group_pld(focus), 'focus': focus, 'judge': 'pld', 'new': True,
+                        'why': f"Not in your file yet: {why}. " + WHY.get(focus, '')})
+        else:
+            out.append({'path': path, 'gear': {}, 'group': _group_job(focus, job, path), 'focus': focus, 'judge': 'job', 'new': True,
+                        'why': f"Not in your file yet: {why}. " + (job_guides.why(job, focus) or (job_sets.FOCUS.get(focus) or {}).get('how', ''))})
     return out
+
+
+def nothing_to_add(row):
+    """A set the guides list that the file lacks, but his gear has nothing for (no piece that boosts the ability): not offered."""
+    r = row.get('r')
+    if not row.get('new') or not r:
+        return False
+    if not r.get('best'):
+        return True
+    n = r.get('n_best') or {}
+    return bool(n.get('ability')) and not n.get('ja')
 
 
 # ------------------------------------------------------------------ what gets written
