@@ -37,6 +37,7 @@ sys.path.insert(0, HERE)
 import paths    # noqa: E402
 import pld      # noqa: E402
 import job_sets  # noqa: E402
+import gear_opt  # noqa: E402
 import pup      # noqa: E402
 import real_fights  # noqa: E402
 import rema     # noqa: E402
@@ -55,7 +56,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.21.0'
+VERSION = '2.22.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -456,6 +457,7 @@ class App(tk.Tk):
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
         self._start_tab()
+        self._optimize_tab()
         self._features_tab()
         self._create_tab()
         self._healing_tab()
@@ -1898,6 +1900,545 @@ class App(tk.Tk):
         if url:
             import webbrowser
             webbrowser.open(url)
+
+    # ------------------------------------------------------------------ Gear Optimization
+    # His request 2026-11-10: "specifically address paladin right now ... create a new tab called gear optimization. it should be able to look at my current
+    # gear and gearswap and look at what each set does and its intention and suggest the best sets for that particular thing. it should also be able to
+    # write it. but it should keep in mind what that job is best for". gear_opt.py does the judging; this is the window.
+    OPT_COLOURS = {'bad': '#c0392b', 'warn': '#b36b00', 'ok': '#2e7d32'}
+
+    def _optimize_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.tab_opt = tab
+        self.nb.add(tab, text='★ Gear Optimization')
+        bar = ttk.Frame(tab)
+        bar.pack(fill='x')
+        ttk.Label(bar, text='File').pack(side='left')
+        self.opt_file = ttk.Combobox(bar, state='readonly', width=26)
+        self.opt_file.pack(side='left', padx=4)
+        self.opt_file.bind('<<ComboboxSelected>>', lambda e: self.opt_load())
+        ttk.Label(bar, text='Sub job').pack(side='left', padx=(8, 0))
+        self.opt_sub = ttk.Combobox(bar, values=JOBS, state='readonly', width=5)
+        self.opt_sub.pack(side='left', padx=4)
+        self.opt_sub.bind('<<ComboboxSelected>>', lambda e: self.opt_load(keep_sub=True))
+        self.opt_cap = tk.BooleanVar(value=bool(self.cfg.get('opt_cap_dt', False)))
+        cb = ttk.Checkbutton(bar, text='50 % damage taken in every set', variable=self.opt_cap, command=self._opt_cap_changed)
+        cb.pack(side='left', padx=(10, 0))
+        ToolTip(cb, "The 2025 FFXIAH Paladin guide's rule: never below 50 % physical and magic damage taken in any set. Off: each set keeps "
+                    "what it is for first, and damage taken counts as part of that (the BG Wiki sets cure at 31-36 %).")
+        self.opt_go = ttk.Button(bar, text='Look at every set', style='Big.TButton', command=self.opt_run)
+        self.opt_go.pack(side='left', padx=(10, 0))
+        ToolTip(self.opt_go, 'Builds the best set from your own gear (inventory and wardrobes) for what each set is for. Takes a minute for a '
+                             'big Paladin file; the list fills in as it goes. Nothing changes in the file until you press Write.')
+        self.opt_stop_btn = ttk.Button(bar, text='Stop', command=self._opt_stop, state='disabled')
+        self.opt_stop_btn.pack(side='left', padx=4)
+        self.opt_status = ttk.Label(bar, text='', foreground='#555')
+        self.opt_status.pack(side='left', padx=8)
+
+        self.opt_role = ttk.LabelFrame(tab, text='', padding=6)
+        self.opt_role.pack(fill='x', pady=(6, 4))
+        self.opt_role_text = ttk.Label(self.opt_role, text='', wraplength=1100, justify='left')
+        self.opt_role_text.pack(anchor='w')
+        self.opt_role_src = ttk.Label(self.opt_role, text='', wraplength=1100, justify='left', foreground='#777', font=('Segoe UI', 8))
+        self.opt_role_src.pack(anchor='w')
+
+        body = ttk.Panedwindow(tab, orient='horizontal')
+        body.pack(fill='both', expand=True)
+        left = ttk.Frame(body)
+        body.add(left, weight=3)
+        t = ttk.Treeview(left, columns=('write', 'for', 'now', 'best', 'gain'), show='tree headings', selectmode='browse')
+        for c, h, w in (('#0', 'Set', 210), ('write', 'Write', 44), ('for', 'It is for', 150), ('now', 'Now', 190), ('best', 'Best from your gear', 190),
+                        ('gain', 'Better', 60)):
+            t.heading(c, text=h)
+            t.column(c, width=w, stretch=c in ('#0', 'now', 'best'), anchor='center' if c in ('write', 'gain') else 'w')
+        t.tag_configure('group', font=('Segoe UI', 9, 'bold'), background='#eef2f7')
+        t.tag_configure('better', foreground='#1b6e20')
+        t.tag_configure('new', foreground='#b36b00')
+        t.tag_configure('other', foreground='#888')
+        sb = ttk.Scrollbar(left, orient='vertical', command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        t.bind('<<TreeviewSelect>>', lambda e: self.opt_show())
+        t.bind('<Button-1>', self._opt_click, add='+')
+        self.opt_tree = t
+
+        right = ttk.Frame(body)
+        body.add(right, weight=2)
+        nb = ttk.Notebook(right)
+        nb.pack(fill='both', expand=True)
+        self.opt_nb = nb
+        one = ttk.Frame(nb, padding=6)
+        nb.add(one, text='This set')
+        self.opt_name = ttk.Label(one, text='Press "Look at every set", or pick a set on the left.', font=('Segoe UI', 10, 'bold'), wraplength=460)
+        self.opt_name.pack(anchor='w')
+        fr = ttk.Frame(one)
+        fr.pack(fill='x', pady=(4, 2))
+        ttk.Label(fr, text='It is for').pack(side='left')
+        self.opt_focus = ttk.Combobox(fr, state='disabled', width=28)
+        self.opt_focus.pack(side='left', padx=4)
+        self.opt_focus.bind('<<ComboboxSelected>>', lambda e: self._opt_focus_changed())
+        ToolTip(self.opt_focus, 'What the Doctor thinks this set is for, from its name. Pick another and it is judged again (remembered for this set).')
+        self.opt_text = tk.Text(one, height=18, wrap='word', font=('Segoe UI', 9), relief='flat', background=self.cget('background') or '#f0f0f0')
+        self.opt_text.pack(fill='both', expand=True)
+        self.opt_text.tag_configure('h', font=('Segoe UI', 9, 'bold'))
+        self.opt_text.tag_configure('good', foreground='#1b6e20')
+        self.opt_text.tag_configure('grey', foreground='#777')
+        self.opt_text.config(state='disabled')
+        btns = ttk.Frame(one)
+        btns.pack(fill='x', pady=(4, 0))
+        self.opt_write_one = ttk.Button(btns, text='Write this set', command=self.opt_write_this, state='disabled')
+        self.opt_write_one.pack(side='left')
+        self.opt_build_btn = ttk.Button(btns, text='Open in Build a set', command=self._opt_open_build, state='disabled')
+        self.opt_build_btn.pack(side='left', padx=6)
+        self.opt_ideas_btn = ttk.Button(btns, text='Gear I don\'t have', command=self._opt_ideas, state='disabled')
+        self.opt_ideas_btn.pack(side='left')
+        ToolTip(self.opt_ideas_btn, 'The pieces you don\'t own that would do the most for this set, one at a time (their item text: no augments).')
+
+        two = ttk.Frame(nb, padding=4)
+        nb.add(two, text='Gear')
+        self.opt_grid_now = GearGrid(two, 'Your set (orange: changes)', lambda: self.items)
+        self.opt_grid_now.pack(fill='x')
+        self.opt_grid_best = GearGrid(two, 'Best from your gear (green: new)', lambda: self.items)
+        self.opt_grid_best.pack(fill='x', pady=(4, 0))
+
+        three = ttk.Frame(nb, padding=6)
+        nb.add(three, text='File checks')
+        self.opt_checks = tk.Text(three, height=18, wrap='word', font=('Segoe UI', 9), relief='flat', background=self.cget('background') or '#f0f0f0')
+        self.opt_checks.pack(fill='both', expand=True)
+        for k, c in self.OPT_COLOURS.items():
+            self.opt_checks.tag_configure(k, foreground=c)
+        self.opt_checks.config(state='disabled')
+        self.opt_hp_btn = ttk.Button(three, text='Put HP pieces on first', command=self.opt_hp_order, state='disabled')
+        self.opt_hp_btn.pack(anchor='w', pady=(4, 0))
+        ToolTip(self.opt_hp_btn, "GearSwap puts the highest 'priority' on first: HP pieces first, so a swap never drops your HP on the way "
+                                 "(the guides: HP management is one of a tank's most important jobs).")
+
+        low = ttk.Frame(tab)
+        low.pack(fill='x', pady=(6, 0))
+        ttk.Button(low, text='Tick every better set', command=self._opt_tick_all).pack(side='left')
+        ttk.Button(low, text='Untick all', command=self._opt_untick).pack(side='left', padx=4)
+        self.opt_write_btn = ttk.Button(low, text='Write the ticked sets (0)', style='Big.TButton', command=self.opt_write_ticked, state='disabled')
+        self.opt_write_btn.pack(side='left', padx=8)
+        ToolTip(self.opt_write_btn, 'Shows exactly what changes, asks first, and keeps a backup of the file (Backups tab).')
+        ttk.Label(low, text='Weapons and shield always stay. In game: //gs reload after writing.', foreground='#777').pack(side='left', padx=8)
+
+        self.opt_paths, self.opt_rows, self.opt_iid, self.opt_ticked = {}, [], {}, set()
+        self.opt_ctx, self.opt_cur, self._opt_sig = None, None, None
+        self._opt_dirty, self._opt_busy, self._opt_stopping = True, False, False
+        self.nb.bind('<<NotebookTabChanged>>', lambda e: self.opt_load() if self._opt_dirty and
+                     str(self.nb.select()) == str(self.tab_opt) else None, add='+')
+
+    def opt_fill_files(self):
+        self.opt_paths = {os.path.basename(f): f for f in doctor.files_for(self.who.get())}
+        names = list(self.opt_paths)
+        self.opt_file.configure(values=names)
+        if self.opt_file.get() not in names:
+            first = [n for n in names if checks.job_of(n) == 'PLD']           # (Paladin first: his request)
+            self.opt_file.set((first or names or [''])[0])
+        self._opt_dirty = True
+        if str(self.nb.select()) == str(self.tab_opt):
+            self.opt_load()
+
+    def _opt_job(self):
+        return checks.job_of(self.opt_file.get() or '') or ''
+
+    def opt_load(self, keep_sub=False):
+        """The file's sets, what each is for, who judges it (nothing built yet: that's "Look at every set")."""
+        if self._opt_busy:
+            return
+        self._opt_dirty = False
+        path = self.opt_paths.get(self.opt_file.get())
+        job = self._opt_job()
+        if not keep_sub:
+            self.opt_sub.set(self.cfg['subs'].get(job, 'BLU' if job == 'PLD' else 'WAR'))
+        R = gear_opt.role(job)
+        self.opt_role.config(text=R['title'])
+        self.opt_role_text.config(text=R['text'])
+        self.opt_role_src.config(text=('Sources: ' + R['sources']) if R['sources'] else '')
+        self.opt_ticked = set()
+        if not path:
+            self.opt_rows = []
+            self._opt_fill()
+            self.opt_status.config(text='No GearSwap files for this character.')
+            return
+        try:
+            ld = self.loaded_file(path)
+        except Exception as e:
+            self.opt_rows = []
+            self._opt_fill()
+            self.opt_status.config(text=f'Could not read the file: {e}')
+            return
+        picked = ((self.cfg.get('opt_focus') or {}).get(os.path.basename(path)) or {})
+        rows = gear_opt.classify(ld, job) + gear_opt.missing(ld, job)
+        for r in rows:
+            if picked.get(r['path']) and picked[r['path']] in gear_opt.focus_choices(r, job):
+                r['picked'] = picked[r['path']]
+        # (results already worked out for this file, gear and choices are kept: only what changed is built again)
+        # (and only while the sets he stands in are the same: their HP is the line every other set is held to)
+        sig, stand = self._opt_signature(), {s['path']: s['gear'] for s in ld.sets if s['path'] in pld.STANDING}
+        same = self._opt_sig and (self._opt_sig[0], self._opt_sig[1], self._opt_sig[3], self._opt_sig[4]) == (sig[0], sig[1], sig[3], sig[4])
+        old = {r['path']: r for r in self.opt_rows} if same and getattr(self, '_opt_stand', None) == stand else {}
+        self._opt_stand = stand
+        for r in rows:
+            o = old.get(r['path'])
+            if o and o.get('r') and o['gear'] == r['gear'] and o.get('picked') == r.get('picked'):
+                r['r'] = o['r']
+        self.opt_rows, self._opt_ld, self._opt_path = rows, ld, path
+        self._opt_fill()
+        n = sum(1 for r in rows if r['judge'] in ('pld', 'idle', 'job'))
+        self.opt_status.config(text=f"{len(ld.sets)} sets: {n} judged here by what they are for"
+                                    + ('' if any(r.get('r') for r in rows) else ' - press "Look at every set"'))
+        self._opt_checks_fill()
+
+    def _opt_signature(self):
+        path = self.opt_paths.get(self.opt_file.get()) or ''
+        def stamp(p):
+            try:
+                return os.path.getmtime(p)
+            except OSError:
+                return None
+        # (file, sub job, the file's time, his bags' time, the damage taken choice)
+        return (path, self.opt_sub.get(), stamp(path), stamp(os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')), bool(self.opt_cap.get()))
+
+    def _opt_fill(self):
+        t = self.opt_tree
+        sel = self.opt_cur['path'] if self.opt_cur else None
+        t.delete(*t.get_children())
+        self.opt_iid = {}
+        order = gear_opt.role(self._opt_job())['order']
+        groups = {}
+        for r in self.opt_rows:
+            groups.setdefault(r['group'], []).append(r)
+        again = None
+        for g in sorted(groups, key=lambda g: order.index(g) if g in order else 99):
+            rows = groups[g]
+            judged = [r for r in rows if r['judge'] in ('pld', 'idle', 'job')]
+            nb = sum(1 for r in rows if r.get('r') and r['r'].get('better'))
+            label = f"{g}  ({len(rows)})" + (f"  - {nb} better" if nb else '')
+            gid = t.insert('', 'end', text=label, open=bool(judged), tags=('group',))
+            for r in rows:
+                iid = t.insert(gid, 'end', text=('＋ ' if r.get('new') else '') + r['path'][len('sets.'):], values=self._opt_values(r),
+                               tags=self._opt_tags(r))
+                self.opt_iid[iid] = r
+                if r['path'] == sel:
+                    again = iid
+        if again:
+            t.selection_set(again)
+            t.see(again)
+        self._opt_tick_label()
+
+    def _opt_values(self, r):
+        res = r.get('r')
+        focus = r.get('picked') or r['focus'] or ('damage: wsdist' if r['judge'] == 'wsdist' else '-')
+        tick = ('☑' if r['path'] in self.opt_ticked else '☐') if res and (res.get('better') or (r.get('new') and res['best'])) else ''
+        if r.get('error'):
+            return (tick, focus, 'could not judge: ' + r['error'][:40], '', '')
+        if not res:
+            return (tick, focus, '(new set)' if r.get('new') else ('...' if r['judge'] in ('pld', 'idle', 'job') else ''), '', '')
+        now = 'none yet' if r.get('new') else gear_opt.short(r, res)
+        best = gear_opt.short(r, res, 'best') if (res['changes'] or r.get('new')) else 'already the best'
+        gain = 'new' if r.get('new') else (f"+{res['gain']:.0f} %" if res.get('better') and res['gain'] >= 1 else 'fix' if res.get('better') else '')
+        return (tick, focus, now, best, gain)
+
+    def _opt_tags(self, r):
+        if r.get('new'):
+            return ('new',)
+        if r.get('r') and r['r'].get('better'):
+            return ('better',)
+        return () if r['judge'] in ('pld', 'idle', 'job') else ('other',)
+
+    def _opt_refresh_row(self, r):
+        for iid, x in self.opt_iid.items():
+            if x is r:
+                self.opt_tree.item(iid, values=self._opt_values(r), tags=self._opt_tags(r))
+                break
+
+    def _opt_cap_changed(self):
+        save_settings({'opt_cap_dt': bool(self.opt_cap.get())})
+        self.cfg['opt_cap_dt'] = bool(self.opt_cap.get())
+        for r in self.opt_rows:
+            r.pop('r', None)
+        self.opt_ctx = None
+        self._opt_fill()
+        self.opt_status.config(text='Changed: press "Look at every set" again.')
+
+    def _opt_make_ctx(self):
+        """The judge's context for this file: built again only when the file, his bags, the sub job or the damage taken choice changed."""
+        sig = self._opt_signature()
+        if self.opt_ctx is not None and self._opt_sig == sig:
+            return self.opt_ctx
+        if self.items is None:
+            self.items = checks.Items()
+        if self._heal_data is None:
+            self._heal_data = healing.ItemData()
+        job = self._opt_job()
+        bags = checks.load_bags(self.who.get()) or {}
+        cands, counts = doctor._owned_cands(self._opt_ld, job, bags, self.items)
+        targets = (self.cfg.get('dt_targets') or {}).get(os.path.basename(self._opt_path)) or {}
+        self.opt_ctx = gear_opt.Ctx(self._opt_ld, job, self.opt_sub.get(), cands, counts, self.items, self._heal_data, targets=targets,
+                                    cap_dt=bool(self.opt_cap.get()))
+        self._opt_sig = sig
+        return self.opt_ctx
+
+    def opt_run(self, wait=False):
+        """Judge every set (in the background; the list fills in as it goes)."""
+        if self._opt_busy or not self.opt_rows:
+            return
+        self._opt_busy, self._opt_stopping = True, False
+        self.opt_go.config(state='disabled')
+        self.opt_stop_btn.config(state='normal')
+        self.opt_status.config(text='Reading your gear ...')
+        self.progress.config(mode='determinate', value=0)
+        rows = [r for r in self.opt_rows if r['judge'] in ('pld', 'idle', 'job') and not r.get('r')]
+
+        def work():
+            try:
+                ctx = self._opt_make_ctx()
+                for i, r in enumerate(rows):
+                    if self._opt_stopping:
+                        break
+                    self._opt_post(lambda i=i, r=r: self.opt_status.config(text=f"{i + 1} / {len(rows)}: {r['path'][len('sets.'):]}"), wait)
+                    gear_opt.analyze([r], ctx)
+                    self._opt_post(lambda i=i, r=r: (self._opt_refresh_row(r), self.progress.config(value=100 * (i + 1) / max(1, len(rows)))), wait)
+                self._opt_post(self._opt_done, wait)
+            except Exception as e:
+                self._opt_post(lambda e=e: self._opt_done(error=e), wait)
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _opt_post(self, fn, wait=False):
+        fn() if wait else self.after(0, fn)
+
+    def _opt_stop(self):
+        self._opt_stopping = True
+        self.opt_status.config(text='Stopping after this set ...')
+
+    def _opt_done(self, error=None):
+        self._opt_busy = False
+        self.opt_go.config(state='normal')
+        self.opt_stop_btn.config(state='disabled')
+        self.progress.config(mode='determinate', value=0)
+        if error:
+            self.opt_status.config(text=f'Could not finish: {error}')
+            return
+        judged = [r for r in self.opt_rows if r.get('r')]
+        nb = sum(1 for r in judged if r['r'].get('better'))
+        nn = sum(1 for r in judged if r.get('new') and r['r']['best'])
+        self.opt_status.config(text=f"{len(judged)} sets judged: {nb} can be better from your gear" + (f", {nn} missing sets can be made" if nn else '')
+                                    + ('' if not self._opt_stopping else ' (stopped)'))
+        self._opt_fill()
+        self._opt_checks_fill()
+        self.opt_show()
+
+    def _opt_checks_fill(self):
+        tx = self.opt_checks
+        tx.config(state='normal')
+        tx.delete('1.0', 'end')
+        ctx = self.opt_ctx if self.opt_ctx is not None and self._opt_sig == self._opt_signature() else None
+        checks_ = gear_opt.file_checks(self.opt_rows, ctx) if ctx else []
+        if not checks_:
+            tx.insert('end', 'The guides\' checks on the whole file show here after "Look at every set"' +
+                      (' (Paladin).' if self._opt_job() == 'PLD' else ' (written for Paladin so far).'), 'grey')
+        for lv, text in checks_:
+            tx.insert('end', {'bad': '✖ ', 'warn': '⚠ ', 'ok': '✔ '}[lv] + text + '\n\n', lv)
+        miss = [r for r in self.opt_rows if r.get('new')]
+        if miss:
+            tx.insert('end', f"Sets the guides list that your file doesn't have ({len(miss)}): " + ', '.join(r['path'][len('sets.'):] for r in miss)
+                      + ". They're in the list with a ＋: tick them to add them (your file's rules must use them: Mote and Selindrile files pick "
+                        'sets by the spell or ability name).\n', 'warn')
+        tx.config(state='disabled')
+        self._opt_hp = {}
+        if self._opt_job() == 'PLD' and getattr(self, '_opt_path', None):
+            try:
+                self._opt_hp = pld.hp_order(self._opt_ld, open(self._opt_path, encoding='utf-8', errors='replace').read())
+            except Exception:
+                self._opt_hp = {}
+        self.opt_hp_btn.config(text=f'Put HP pieces on first ({len(self._opt_hp)} sets)' if self._opt_hp else 'HP pieces already go on first',
+                               state='normal' if self._opt_hp else 'disabled')
+
+    def _opt_click(self, e):
+        """A click in the Write column ticks / unticks a set."""
+        t = self.opt_tree
+        if t.identify_region(e.x, e.y) != 'cell' or t.identify_column(e.x) != '#1':
+            return
+        iid = t.identify_row(e.y)
+        r = self.opt_iid.get(iid)
+        if not r or not self._opt_values(r)[0]:
+            return
+        self.opt_ticked ^= {r['path']}
+        self._opt_refresh_row(r)
+        self._opt_tick_label()
+
+    def _opt_tick_label(self):
+        self.opt_ticked &= {r['path'] for r in self.opt_rows if self._opt_values(r)[0]}
+        n = len(self.opt_ticked)
+        self.opt_write_btn.config(text=f'Write the ticked sets ({n})', state='normal' if n else 'disabled')
+
+    def _opt_tick_all(self):
+        for r in self.opt_rows:
+            res = r.get('r')
+            if res and res.get('better') and not r.get('new'):
+                self.opt_ticked.add(r['path'])
+        self._opt_fill()
+
+    def _opt_untick(self):
+        self.opt_ticked = set()
+        self._opt_fill()
+
+    def opt_show(self):
+        sel = self.opt_tree.selection()
+        r = self.opt_iid.get(sel[0]) if sel else None
+        if not r:
+            return
+        self.opt_cur = r
+        job = self._opt_job()
+        res = r.get('r')
+        self.opt_name.config(text=r['path'] + ('   (not in your file yet)' if r.get('new') else ''))
+        choices = gear_opt.focus_choices(r, job)
+        self.opt_focus.config(values=choices, state='readonly' if choices and not self._opt_busy else 'disabled')
+        self.opt_focus.set(r.get('picked') or r['focus'] or '')
+        tx = self.opt_text
+        tx.config(state='normal')
+        tx.delete('1.0', 'end')
+        f = r.get('picked') or r['focus']
+        why = gear_opt.WHY.get(f, '') if r['judge'] == 'pld' else ''
+        tx.insert('end', 'What it is for\n', 'h')
+        tx.insert('end', (why or r['why'] or '-') + '\n\n')
+        if r.get('error'):
+            tx.insert('end', 'Could not judge it: ' + r['error'] + '\n')
+        elif res:
+            if not r.get('new'):
+                tx.insert('end', 'Your set now\n', 'h')
+                tx.insert('end', gear_opt.words(r, res, 'now') + '\n\n')
+            tx.insert('end', 'Best from your gear\n', 'h')
+            if res['changes'] or r.get('new'):
+                tx.insert('end', gear_opt.words(r, res, 'best') + '\n', 'good')
+                if not r.get('new'):
+                    names = lambda g: {s: c['name'] for s, c in g.items() if c}  # noqa: E731
+                    a, b = names(res['cur']), names(res['best'])
+                    for s, v in res['changes'].items():
+                        tx.insert('end', f"   {s}: {a.get(s, 'empty')}  ->  {v['name'] if isinstance(v, dict) else v}\n")
+                tx.insert('end', '\n')
+            else:
+                tx.insert('end', 'Your set is already the best your gear can do for this.\n\n')
+            tp = gear_opt.tip(r, res)
+            if tp:
+                tx.insert('end', 'The guides say\n', 'h')
+                tx.insert('end', tp + '.\n\n')
+            notes = [n for n in res.get('notes', []) if not n.startswith('judged for')]
+            if notes:
+                tx.insert('end', '\n'.join('· ' + n for n in notes) + '\n', 'grey')
+            if r.get('ideas') is not None:
+                tx.insert('end', '\nGear you don\'t have that would do more\n', 'h')
+                tx.insert('end', (', '.join(f'{name} ({s})' for s, name, d in r['ideas']) or 'nothing found') + '\n')
+        elif r['judge'] in ('pld', 'idle', 'job'):
+            tx.insert('end', 'Not judged yet: press "Look at every set".\n', 'grey')
+        tx.config(state='disabled')
+        if res:
+            ch = res['changes'] if not r.get('new') else {s: 1 for s in res['best']}
+            self.opt_grid_now.show({s: c['name'] for s, c in res['cur'].items() if c}, {s: '#fbe3c4' for s in ch if not r.get('new')})
+            self.opt_grid_best.show({s: c['name'] for s, c in res['best'].items() if c}, {s: '#c8efc0' for s in ch})
+        else:
+            self.opt_grid_now.show({gs_slot(k): g['name'] for k, g in r['gear'].items() if gs_slot(k)})
+            self.opt_grid_best.show({})
+        can = bool(res) and (bool(res['changes']) or (bool(r.get('new')) and bool(res['best'])))
+        self.opt_write_one.config(state='normal' if can and not self._opt_busy else 'disabled',
+                                  text='Add this set to the file' if r.get('new') else 'Write this set')
+        self.opt_build_btn.config(state='normal' if not r.get('new') else 'disabled')
+        self.opt_ideas_btn.config(state='normal' if res and r['judge'] in ('pld', 'job') and not self._opt_busy else 'disabled')
+
+    def _opt_focus_changed(self):
+        r = self.opt_cur
+        if not r or self._opt_busy:
+            return
+        f = self.opt_focus.get()
+        r['picked'] = f if f != r['focus'] else None
+        allp = self.cfg.setdefault('opt_focus', {})
+        mine = allp.setdefault(os.path.basename(self._opt_path), {})
+        if r['picked']:
+            mine[r['path']] = f
+        else:
+            mine.pop(r['path'], None)
+        save_settings({'opt_focus': allp})
+        r.pop('r', None)
+        r.pop('ideas', None)
+        self._opt_one(r)
+
+    def _opt_one(self, r, wait=False):
+        """Judge one set again (after he picks what it is for)."""
+        self._opt_busy = True
+        self.opt_status.config(text='Building ' + r['path'][len('sets.'):] + ' ...')
+
+        def work():
+            try:
+                gear_opt.analyze([r], self._opt_make_ctx())
+            except Exception as e:
+                r['error'] = str(e)
+
+            def done():
+                self._opt_busy = False
+                self._opt_refresh_row(r)
+                self.opt_status.config(text='')
+                self._opt_tick_label()
+                self.opt_show()
+            self._opt_post(done, wait)
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _opt_ideas(self, wait=False):
+        r = self.opt_cur
+        if not r or not r.get('r'):
+            return
+        self.opt_status.config(text='Looking through every item a ' + self._opt_job() + ' can wear ...')
+
+        def work():
+            try:
+                ctx = self._opt_make_ctx()
+                every = job_sets.all_candidates(ctx.job, self.items, self._heal_data)
+                r['ideas'] = gear_opt.ideas(r, r['r'], ctx, every)
+            except Exception as e:
+                r['ideas'] = []
+                r['error_ideas'] = str(e)
+            self._opt_post(lambda: (self.opt_status.config(text=''), self.opt_show()), wait)
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _opt_open_build(self):
+        if self.opt_cur:
+            self.open_build(self._opt_path, self.opt_cur['path'])
+
+    def _opt_write(self, rows):
+        edits = [e for e in (gear_opt.edit_for(r, self._opt_ld) for r in rows) if e]
+        if not edits:
+            return False
+        ok = self._apply({self._opt_path: edits})
+        if ok is not False:
+            self.opt_ticked -= {r['path'] for r in rows}
+            self.loaded.pop(self._opt_path, None)
+            self.opt_load(keep_sub=True)           # (sets that didn't change keep their results)
+            self.opt_status.config(text=f"Written: {len(edits)} set(s). In game: //gs reload. Press \"Look at every set\" to see the file again.")
+        return ok
+
+    def opt_write_this(self):
+        if self.opt_cur and self.opt_cur.get('r'):
+            self._opt_write([self.opt_cur])
+
+    def opt_write_ticked(self):
+        rows = [r for r in self.opt_rows if r['path'] in self.opt_ticked and r.get('r')]
+        self._opt_write(rows)
+
+    def opt_hp_order(self):
+        if getattr(self, '_opt_hp', None):
+            if self._apply({self._opt_path: [('priority', sp, pr) for sp, pr in self._opt_hp.items()]}) is not False:
+                self.loaded.pop(self._opt_path, None)
+                self.opt_load(keep_sub=True)
 
     # ------------------------------------------------------------------ Healing
     # His request 2026-10-30: "do research, and figure out how to add in a features for healing and making healing sets".
@@ -4249,6 +4790,7 @@ class App(tk.Tk):
         self.fill_jobs()
         self.feat_fill_files()
         self.heal_fill_files()
+        self.opt_fill_files()
         self.prog_fill_jobs()
         self.fill_overview()
         self.fill_problems()

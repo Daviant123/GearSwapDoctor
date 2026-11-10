@@ -93,6 +93,13 @@ FOCUS = {
     'Cure others': {'sird': 6, 'potency': 8, 'phys': 3, 'magic': 3, 'enmity': 1, 'hp': 0.04},
     'Cure yourself': {'sird': 6, 'potency': 8, 'received': 6, 'hp': 0.1, 'enmity': 1, 'phys': 2, 'magic': 2},
     'Fast cast': {'fast': 8, 'hp': 0.06, 'phys': 0.5, 'magic': 0.5},
+    # (2026-11-10 research, RESEARCH.md "Paladin, more guides"): BG Wiki's Finans PLD sets keep a "Cure Cheat" fast cast set that LOWERS max HP on purpose, so a
+    # self-cure heals (and pulls hate) more; FFXIAH's 2025 guide thread: fine with GearSwap, as a separate macro. Only for a set named so (or picked).
+    'Fast cast, cure cheat': {'fast': 8, 'hp': -0.04, 'phys': 1, 'magic': 1},
+    # (BG Wiki Community PLD Guide: Reprisal "spell duration and enmity, with some Fast Cast"; its sets Enm.+63~79, FC+12~27 %, DT capped)
+    'Reprisal': {'enmity': 3, 'fast': 2, 'enh_dur': 2, 'phys': 3, 'magic': 3, 'hp': 0.05},
+    # (Finans PLD Stoneskin set: Stoneskin +110, interruption capped too)
+    'Stoneskin': {'ss': 3, 'MND': 1, 'sird': 4, 'phys': 2, 'magic': 2, 'hp': 0.04},
     'Covering': {'ja': 60, 'phys': 20, 'magic': 10, 'hp': 0.02},
     'Doom': {'holy_water': 6, 'cursna_rec': 6, 'phys': 1, 'magic': 1},
     'Chivalry': {'ja': 80, 'MND': 2, 'phys': 2, 'magic': 2},
@@ -116,6 +123,8 @@ def focus_for(path):
         return 'Doom' if 'doom' in rest else 'Covering' if 'cover' in rest else None
     sird = 'sird' in rest
     if rest[0] == 'precast':
+        if any('cheat' in x for x in rest):
+            return 'Fast cast, cure cheat'
         if 'ja' in rest:
             ja = rest[rest.index('ja') + 1] if rest.index('ja') + 1 < len(rest) else ''
             for a in JA_GEAR:
@@ -139,6 +148,10 @@ def focus_for(path):
             return 'Enmity, not interrupted' if sird else 'Enmity'
         if 'blue magic' in what or any(x in what for x in ('geist wall', 'sheep song', 'blank gaze', 'soporific', 'stinking gas', 'frightful roar')):
             return 'Enmity, not interrupted'
+        if 'reprisal' in what:
+            return 'Spell, not interrupted' if sird else 'Reprisal'
+        if 'stoneskin' in what:
+            return 'Stoneskin'
         if re.search(r'self|cure_self|cureself', what):
             return 'Cure yourself'
         if 'cur' in what or 'healing magic' in what:
@@ -185,9 +198,19 @@ def ja_pieces(gear, ability):
 
 def phalanx_from_skill(skill):
     """Phalanx's damage cut a hit from Enhancing magic skill (BG Wiki / the guide's table: 300 = 28, 358 = 30, 415 = 32, 500 = 35)."""
+    skill = min(skill, 500)                      # (potency stops at 500 Enhancing skill: BG Wiki Community PLD Guide)
     if skill <= 300:
         return max(0, math.floor(skill / 10) - 2)
     return 28 + math.floor((skill - 300.5) / 28.5)
+
+
+def step_start(skill):
+    """The lowest skill that gives the same Phalanx as this skill (the start of the step it's on)."""
+    f = phalanx_from_skill(skill)
+    s = skill
+    while s > 0 and phalanx_from_skill(s - 1) == f:
+        s -= 1
+    return s
 
 
 def next_phalanx_skill(skill):
@@ -207,19 +230,27 @@ def hp_of(c):
 
 def numbers(gear, focus=None):
     """What a set has, as a PLD's sets are judged."""
-    t = healing.totals(gear)
+    t, hp = {}, 0
     for c in gear.values():
         if c:
-            healing.add(t, _named(c))
+            pre = c.get('_pld')
+            if pre is None or pre[0] is not c['stats']:          # (a piece's own stats + what its text doesn't say, and its HP: worked out once)
+                st = dict(c['stats'])
+                healing.add(st, _named(c))
+                pre = c['_pld'] = (c['stats'], [(k, v) for k, v in st.items() if v], hp_of(c))
+            for k, v in pre[1]:
+                t[k] = t.get(k, 0) + v
+            hp += pre[2]
     pd, md = healing.dt_totals(t)
     enmity = t.get('enmity', 0) + t.get('u_enmity', 0)
     skill = ENH_SKILL + t.get('enh_skill', 0)
     n = {'phys': pd, 'magic': md, 'enmity': enmity, 'keep': t.get('enm_keep', 0), 'sird': t.get('sird', 0) + SIRD_MERITS,
          'phalanx_gear': t.get('phalanx', 0), 'enh_skill': skill, 'phalanx': phalanx_from_skill(skill) + t.get('phalanx', 0),
          'divine': t.get('div_skill', 0), 'fast': t.get('fast', 0), 'potency': t.get('potency', 0), 'received': t.get('received', 0),
-         'hp': sum(hp_of(c) for c in gear.values() if c), 'MND': t.get('MND', 0), 'meva': t.get('meva', 0), 'mdb': t.get('mdb', 0),
+         'hp': hp, 'MND': t.get('MND', 0), 'meva': t.get('meva', 0), 'mdb': t.get('mdb', 0),
          'status': t.get('status_res', 0), 'refresh': t.get('refresh', 0), 'regen': t.get('regen', 0), 'def': t.get('DEF', 0), 'acc': t.get('acc', 0),
-         'stp': t.get('stp', 0), 'bash': t.get('bash', 0), 'holy_water': t.get('holy_water', 0), 'cursna_rec': t.get('cursna_rec', 0)}
+         'stp': t.get('stp', 0), 'bash': t.get('bash', 0), 'holy_water': t.get('holy_water', 0), 'cursna_rec': t.get('cursna_rec', 0),
+         'ss': t.get('ss', 0), 'enh_dur': t.get('enh_dur', 0)}
     ability = focus[len('Ability: '):] if focus and focus.startswith('Ability: ') else 'Chivalry' if focus == 'Chivalry' else 'Covering' if focus == 'Covering' else None
     n['ja'] = ja_pieces(gear, ability) if ability else 0
     n['ability'] = ability
@@ -227,7 +258,7 @@ def numbers(gear, focus=None):
 
 
 HP_FLOOR_PTS = 0.4             # (points lost for each HP a swap set is below the sets you stand in: that much HP is cut every time it goes on)
-NO_FLOOR = ('Doom', 'Covering')
+NO_FLOOR = ('Doom', 'Covering', 'Fast cast, cure cheat')
 TANK_FLOOR_PTS = 0.15          # (a tank set below that line has less of an HP pool: the guide keeps its idle set the highest in HP; damage taken still comes first)
 
 
@@ -272,8 +303,12 @@ def words(n, focus=None):
         out.append(f"Cure potency {n['potency']} % of {POTENCY_CAP}")
         if f == 'Cure yourself':
             out.append(f"received {n['received']} % of {RECEIVED_CAP}")
-    if f == 'Fast cast':
+    if f.startswith('Fast cast') or f == 'Reprisal':
         out.append(f"Fast Cast {n['fast']} % of {FAST_CAP}")
+    if f == 'Reprisal':
+        out.append(f"enmity +{n['enmity']}, duration +{n['enh_dur']} %")
+    if f == 'Stoneskin':
+        out.append(f"Stoneskin +{n['ss']}, MND +{n['MND']}, interruption -{n['sird']} %")
     if n.get('ability'):
         out.append(f"{n['ja']} piece(s) for {n['ability']}" if n['ja'] else f"nothing for {n['ability']}")
     if f == 'Doom':
@@ -291,7 +326,12 @@ def advice(n, focus, idle_hp=None):
     if ('interrupted' in f or f.startswith('Cure')) and n['sird'] < SIRD_CAP:
         tips.append(f"interruption {n['sird']} %: {SIRD_CAP} % means spells are never cut off while you're hit (with 5/5 merits)")
     if f.startswith('Phalanx'):
-        tips.append(f"Enhancing skill {n['enh_skill']}: Phalanx gets 1 better at {next_phalanx_skill(n['enh_skill'])}")
+        over = n['enh_skill'] - step_start(n['enh_skill'])
+        tips.append(f"Enhancing skill {n['enh_skill']}: past 500 more skill does nothing for Phalanx, only Phalanx+ gear" if n['enh_skill'] >= 500 else
+                    f"Enhancing skill {n['enh_skill']}: Phalanx gets 1 better at {next_phalanx_skill(n['enh_skill'])}"
+                    + (f" ({over} skill past the step you're on does nothing: Phalanx goes in steps, BG Wiki's 'common mistake')" if over >= 5 and n['enh_skill'] < 500 else ''))
+    if f == 'Fast cast, cure cheat':
+        tips.append('a cure cheat set: lower max HP on purpose, so your own cures heal (and pull hate) more; the guides say use it with GearSwap only')
     if 'Enmity' in f and n['enmity'] > ENMITY_SPIKE:
         tips.append(f"enmity +{n['enmity']}: with Crusade (+30) more than +{ENMITY_SPIKE} from gear is wasted")
     if f == 'Fast cast' and n['fast'] > FAST_CAP:
@@ -303,11 +343,42 @@ def advice(n, focus, idle_hp=None):
     return '; '.join(tips)
 
 
+_USEFUL = {}
+
+
+def useful_cached(cands):
+    key = id(cands)
+    if key not in _USEFUL or _USEFUL[key][0] is not cands:
+        _USEFUL[key] = (cands, useful(cands))
+    return _USEFUL[key][1]
+
+
 def useful(cands):
-    keys = ('dt', 'pdt', 'mdt', 'dt2', 'pdt2', 'mdt2', 'enmity', 'u_enmity', 'enm_keep', 'sird', 'phalanx', 'enh_skill', 'div_skill', 'fast', 'potency', 'received',
+    keys = ('ss', 'enh_dur', 'dt', 'pdt', 'mdt', 'dt2', 'pdt2', 'mdt2', 'enmity', 'u_enmity', 'enm_keep', 'sird', 'phalanx', 'enh_skill', 'div_skill', 'fast', 'potency', 'received',
             'HP', 'mp_to_hp', 'u_hp', 'hp_pct', 'MND', 'meva', 'mdb', 'status_res', 'refresh', 'regen', 'holy_water', 'cursna_rec', 'bash')
     names = {p for t in JA_GEAR.values() for p in t} | set(COVERING) | set(NAMED)
     return [c for c in cands if any(c['stats'].get(k) for k in keys) or any(c['name'].lower().startswith(p) for p in names)]
+
+
+# (the stats numbers() reads: candidates are trimmed to these before a build, so adding up a set is quick - his Gear Optimization tab judges 100+ sets)
+STATS = ('dt', 'pdt', 'mdt', 'dt2', 'pdt2', 'mdt2', 'enmity', 'u_enmity', 'enm_keep', 'sird', 'phalanx', 'enh_skill', 'div_skill', 'fast', 'potency', 'received',
+         'HP', 'mp_to_hp', 'u_hp', 'hp_pct', 'MND', 'meva', 'mdb', 'status_res', 'refresh', 'regen', 'DEF', 'acc', 'stp', 'bash', 'holy_water', 'cursna_rec',
+         'ss', 'enh_dur')
+_SLIM = {}
+
+
+def slim(cands):
+    """The same candidates with only the stats a PLD set is judged on (cached per list)."""
+    key = id(cands)
+    if key in _SLIM and _SLIM[key][0] is cands:
+        return _SLIM[key][1]
+    out = []
+    for c in cands:
+        d = dict(c)
+        d['stats'] = {k: v for k, v in c['stats'].items() if k in STATS and v}
+        out.append(d)
+    _SLIM[key] = (cands, out)
+    return out
 
 
 NOTE = 'weapons and shield kept: a new weapon throws away TP and Aftermath'
@@ -342,7 +413,7 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     out = {'cur': cur, 'best': cur, 'now': v0, 'val': v0, 'n_now': n0, 'n_best': n0, 'changes': {}, 'focus': focus, 'keep': True, 'notes': notes, 'short': 0, 'idle_hp': idle_hp,
            'short_now': healing.shortfall(healing.totals(cur), need or None)}
     if build:
-        best, val, now = healing.build('pld', useful(cands), cur, {}, job, sub, spell=(focus, floor) if floor else focus, need=need or None, keep_weapons=True,
+        best, val, now = healing.build('pld', slim(useful_cached(cands)), cur, {}, job, sub, spell=(focus, floor) if floor else focus, need=need or None, keep_weapons=True,
                                        counts=counts, only_slots=only)
         out.update(best=best, val=val, now=now, n_best=numbers(best, focus), changes=healing.changes(cur, best, True), short=healing.shortfall(healing.totals(best), need or None))
     return out
