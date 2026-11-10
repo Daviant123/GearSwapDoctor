@@ -182,16 +182,24 @@ def candidate(it, data, augments=None):
     add(st, pup.parse(data.text.get(it['id'], '')))         # (what it gives a pet)
     add(st, gs_create.parse(data.text.get(it['id'], '')))   # (the rest a new file's sets ask for)
     add(st, pld.parse(data.text.get(it['id'], '')))         # (a tank's: Phalanx, enmity kept when hit ...)
+    import job_sets
+    add(st, job_sets.parse(data.text.get(it['id'], '')))    # (every job's sets: rolls, casting times, Stoneskin ...)
+    if it['en'].lower() in job_sets.FAST_NAMED and st.get('fast') == 2:
+        st['fast'] = job_sets.FAST_NAMED[it['en'].lower()]
+    quoted = job_sets.quoted(data.text.get(it['id'], ''))   # (the abilities its text names: "Chain Affinity"+24, Enhances "Diffusion" effect)
     for a in augments or []:
         add(st, parse_text(str(a)))
         add(st, pup.parse(str(a)))
         add(st, gs_create.parse(str(a)))
         add(st, pld.parse(str(a)))
+        add(st, job_sets.parse(str(a)))
+        for k, v in job_sets.quoted(str(a)).items():
+            quoted[k] = max(quoted.get(k, 0), v)
     info = data.info.get(it['id'], {})
     text = data.text.get(it['id'], '')
     # (a JSE earring whose stats are all "Right ear:": nothing in the left ear, so it only goes in the right)
     side = 'ear2' if text.startswith('Right ear:') else 'ear1' if text.startswith('Left ear:') else None
-    return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'], 'side': side,
+    return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'], 'side': side, 'quoted': quoted,
             'skill': info.get('skill'), 'shield': info.get('shield', False),
             'two_handed': info.get('skill') in TWO_HANDED and bool(it['slots'] & 1)}
 
@@ -376,6 +384,9 @@ def evaluate(kind, gear, base, spell=None, solace=False):
     elif kind == 'pld':
         import pld
         v = pld.value(gear, spell)
+    elif kind == 'jobset':
+        import job_sets
+        v = job_sets.value(gear, spell)
     else:
         raise ValueError(kind)
     return v, t

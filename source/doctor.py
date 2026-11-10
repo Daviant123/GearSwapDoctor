@@ -615,6 +615,70 @@ def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=
     return out
 
 
+def _owned_cands(loaded, job, bags, items):
+    """(candidates, counts) of what's in the inventory and wardrobes, for the item-text judges."""
+    global _IDLE_DATA
+    import healing
+    if _IDLE_DATA is None:
+        _IDLE_DATA = healing.ItemData()
+    counts, seen = {}, set()
+    for b, c in (bags or {}).items():
+        if not b.startswith('_') and b in checks.EQUIP_BAGS:
+            for iid, n in c.items():
+                it = items.by_id.get(iid)
+                if it:
+                    counts[it['en']] = counts.get(it['en'], 0) + n
+                    seen.add(iid)
+    owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    return healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded])), counts
+
+
+def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=None, ideas=True, progress=None):
+    """Every other set of the job (job_sets.py: fast cast, enhancing, enfeebling, songs, rolls, Quick Draw, TH, Blood Pacts, Ready, BLU skill / cures,
+    ability sets ...), judged by what that set is for. The same kind of entries as pld_upgrades; kind 'jobset'."""
+    import job_sets
+    cands, counts = _owned_cands(loaded, job, bags, items)
+    every = job_sets.all_candidates(job, items, _IDLE_DATA) if ideas and job in checks.JOBS else None
+    out, done = [], {}
+    rows = job_sets.checked_sets(loaded, job)
+    for i, s in enumerate(rows):
+        if only and s['path'] != only:
+            continue
+        if progress and i % 10 == 0:
+            progress(f'job sets {i + 1} of {len(rows)}')
+        target = (targets or {}).get(s['path']) or {}
+        need = need_of(target, sird=True)
+        key = (job_sets.focus_for(s['path'], job), job_sets.ability_of(s['path']), tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in s['gear'].items())),
+               tuple(sorted(need.items())))
+        try:
+            if key in done:
+                r = done[key]
+            else:
+                r = done[key] = job_sets.judge(s['path'], s['gear'], job, sub, cands, counts, items, _IDLE_DATA, need=need, ideas=every)
+        except Exception as e:                              # (one odd set never stops the check-up)
+            if stats is not None:
+                stats.setdefault('errors', []).append(f"{s['path']}: {e}")
+            continue
+        tip = job_sets.tip(r['n_best'], r['focus'])
+        idea = job_sets.ideas_text(r.get('ideas'))
+        if stats is not None:
+            stats.setdefault('judged', []).append({'set': s['path'], 'focus': r['focus'], 'now': job_sets.say(r['n_now'], r['focus']),
+                                                   'best': job_sets.say(r['n_best'], r['focus']), 'tip': tip, 'ideas': idea})
+        # (better at what the set is for, not only in damage taken: an ability set with no gear for the ability stays as it is)
+        m0, m1 = r.get('main_now', r['now']), r.get('main_best', r['val'])
+        gain = (m1 - m0) / abs(m0) * 100 if m0 else (100 if m1 > 0 else 0)
+        if r['val'] <= r['now']:
+            gain = 0
+        fix = bool(need) and r.get('short_now', 0) > r['short']
+        if r['changes'] and (gain >= 1 or fix):
+            changes = {k: (v['name'] if isinstance(v, dict) else v) for k, v in r['changes'].items()}
+            out.append({'set': s['path'], 'ws': f"{r['focus']}: " + s['path'][len('sets.'):], 'kind': 'jobset', 'now': r['now'], 'best': r['val'], 'gain': round(gain, 1),
+                        'unit': 'jobset', 'focus': r['focus'], 'now_text': job_sets.say(r['n_now'], r['focus']), 'best_text': job_sets.say(r['n_best'], r['focus']),
+                        'changes': changes, 'notes': r['notes'] + ([tip] if tip else []) + ([idea] if idea else []) +
+                        ([f"short of what you set by {r['short']}"] if r['short'] else []), 'dt_fix': fix})
+    return out
+
+
 def replan(character, path, set_path, sub, target):
     """One set again with his numbers, quickly: a PLD's tank set (pld.py) or an idle set (idle.py). Returns its upgrades ([] = nothing better), or None for a
     set wsdist judges (weapon skills, TP: the next Check now uses his numbers)."""
@@ -629,6 +693,9 @@ def replan(character, path, set_path, sub, target):
         return pld_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path)
     if idle.is_idle(set_path):
         return [u for u in idle_upgrades(loaded, job, sub, bags, items, targets=tg) if u['set'] == set_path]
+    import job_sets
+    if job_sets.takes(set_path, job):
+        return job_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path)
     return None
 
 
@@ -866,7 +933,7 @@ def _am_notes(info):
 def tp_checked_text(f):
     """For the app: 'TP sets: 30 of 91 checked...'; '' for a file without TP sets or an older report."""
     if not f.get('tp_total'):
-        return f.get('pld_coverage', '')
+        return '.  '.join(x for x in (f.get('pld_coverage', ''), f.get('job_coverage', '')) if x)
     text = f"TP sets: {f.get('tp_checked', 0)} of {f['tp_total']} checked, one per weapon and mode first"
     if f.get('tp_stopped'):
         text += ' (stopped at the time limit)'
@@ -874,6 +941,8 @@ def tp_checked_text(f):
         text += '; not checked: ' + ', '.join(f'{n} ({why})' for why, n in f['tp_not_checked'].items())
     if f.get('pld_coverage'):
         text = f['pld_coverage'] + '.  ' + text
+    if f.get('job_coverage'):
+        text = text + '.  ' + f['job_coverage']
     return text
 
 
@@ -980,6 +1049,13 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
                 entry['pld_judged'] = pld_stats.get('judged', [])
                 import pld
                 entry['pld_coverage'] = pld.coverage_text(pld.coverage(loaded), len(entry['pld_judged']))
+            job_stats = {}
+            if progress:
+                progress('job sets: what each set is for')
+            entry['upgrades'] += job_upgrades(loaded, job, js, bags, items, targets=tg, stats=job_stats, progress=progress)
+            entry['job_judged'] = job_stats.get('judged', [])
+            import job_sets
+            entry['job_coverage'] = job_sets.coverage_text(job_sets.coverage(loaded, job), len(entry['job_judged']))
             if job == 'PUP':
                 pet_stats = {}
                 entry['upgrades'] += pet_upgrades(loaded, job, js, bags, items, targets=tg, stats=pet_stats)

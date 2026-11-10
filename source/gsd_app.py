@@ -36,6 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import paths    # noqa: E402
 import pld      # noqa: E402
+import job_sets  # noqa: E402
 import pup      # noqa: E402
 import real_fights  # noqa: E402
 import rema     # noqa: E402
@@ -54,7 +55,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.20.0'
+VERSION = '2.21.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -137,7 +138,7 @@ def nowbest(u):
         return f"{u['now']} s -> {u['best']} s to a WS"
     if u.get('unit') == 'dps':
         return f"{u['now']:.0f} -> {u['best']:.0f} damage a second"
-    if u.get('kind') in ('idle', 'pet', 'pld'):
+    if u.get('kind') in ('idle', 'pet', 'pld', 'jobset'):
         return f"{u['now_text']}  ->  {u['best_text']}"
     return f"{u['now']} -> {u['best']}"
 
@@ -146,7 +147,7 @@ def gain_words(u):
     """What the gain is: 'average damage for Savage Blade' / 'faster to a weapon skill (TP set engaged.Acc)'."""
     if u.get('kind') == 'tp':
         return {'s': 'faster to a weapon skill', 'dps': 'more damage a second, weapon skills included'}.get(u.get('unit'), 'more damage per attack round') + f" with {u['ws'][4:]}"
-    if u.get('kind') in ('idle', 'pet', 'pld'):
+    if u.get('kind') in ('idle', 'pet', 'pld', 'jobset'):
         return f"better for what it's for ({u['ws']})"
     if u.get('kind') == 'magic':
         return f"more damage a cast ({u['ws'][len('Magic: '):]})"
@@ -1135,10 +1136,13 @@ class App(tk.Tk):
         # 3. upgrades
         for f, u in ups[:3]:
             n = len(u['changes'])
-            self._card('good', f"{u['ws']}: {verdict_u(u).lower()} ({gain_text(u)} {'faster to a weapon skill' if u.get('kind') == 'tp' else 'damage'}) in {f['file']}",
-                       f"wsdist found a better set from gear you already own: {n} item(s) change "
-                       f"({', '.join(list(u['changes'].values())[:4])}{' ...' if n > 4 else ''}). {'Time to a weapon skill' if u.get('kind') == 'tp' else 'Average damage'}: {nowbest(u)}."
-                       + (' ' + BIG_GAIN_NOTE if u['gain'] > 100 else ''),
+            by_need = u.get('kind') in ('idle', 'pet', 'pld', 'jobset')       # (judged by what the set is for, not by wsdist's damage)
+            self._card('good', f"{u['ws']}: {verdict_u(u).lower()} ({gain_text(u)} {'faster to a weapon skill' if u.get('kind') == 'tp' else 'better for its job' if by_need else 'damage'}) in {f['file']}",
+                       (f"A better set for what it is for, from gear you already own: {n} item(s) change " if by_need else
+                        f"wsdist found a better set from gear you already own: {n} item(s) change ")
+                       + f"({', '.join(list(u['changes'].values())[:4])}{' ...' if n > 4 else ''}). "
+                       + (f"{nowbest(u)}." if by_need else f"{'Time to a weapon skill' if u.get('kind') == 'tp' else 'Average damage'}: {nowbest(u)}.")
+                       + (' ' + BIG_GAIN_NOTE if u['gain'] > 100 and not by_need else ''),
                        [('Look', lambda f=f, u=u: self.show_upgrade_for(f['path'], u['set'])),
                         ('Apply this', lambda f=f, u=u: self._apply({f['path']: [('slots', u['set'], u['changes'])]}))])
         if len(ups) > 3:
@@ -3083,7 +3087,10 @@ class App(tk.Tk):
         tank = sorted((s['path'] for s in ld.sets if pld.takes(s['path'], job) and s['path'] not in ws + tp + rest + pets), key=lambda p_: (p_.count('.'), p_))
         nukes = sorted((s['path'] for s in ld.sets if magic.kind_of(s['path'], job) and s['path'] not in ws + tp + rest + pets + tank),
                        key=lambda p_: (p_.count('.'), p_))
-        return ws + tp + rest + pets + tank + nukes
+        # (every other set of the job, judged by what it is for: job_sets.py - fast cast, enhancing, songs, rolls, TH, abilities ...)
+        done = set(ws + tp + rest + pets + tank + nukes)
+        others = sorted((s['path'] for s in ld.sets if s['path'] not in done and job_sets.takes(s['path'], job)), key=lambda p_: (p_.count('.'), p_))
+        return ws + tp + rest + pets + tank + nukes + others
 
     def sim_file_changed(self):
         name = self.sim_file.get()
@@ -3131,7 +3138,8 @@ class App(tk.Tk):
         self.sim_tp_label.config(text='WS at TP' if is_tp else 'TP')
         self.sim_tp.set(self.cfg.get('ws_tp', 1000) if is_tp else self.cfg['tp'])
         is_pld = pld.takes(sp, checks.job_of(self.sim_file.get() or ''))
-        rest = idle.is_idle(sp) or pup.is_pet_set(sp, checks.job_of(self.sim_file.get() or '')) or is_pld
+        is_job = bool(sp) and not is_pld and job_sets.takes(sp, checks.job_of(self.sim_file.get() or ''))
+        rest = idle.is_idle(sp) or pup.is_pet_set(sp, checks.job_of(self.sim_file.get() or '')) or is_pld or is_job
         is_pet = pup.is_pet_set(sp, checks.job_of(self.sim_file.get() or ''))
         # (the last set's results don't stay under this one)
         if hasattr(self, 'sim_result') and hasattr(self, 'sim_grid_best'):
@@ -3140,10 +3148,13 @@ class App(tk.Tk):
             self.sim_grid_now.show({})
             self.sim_grid_best.show({})
         self.sim_focus.config(state='readonly' if rest else 'disabled')
-        self.sim_focus.config(values=list(pld.FOCUS) if is_pld else list(pup.FOCUS) if is_pet else list(idle.FOCUS))
-        self.sim_focus.set(pld.focus_for(sp) if is_pld else pup.focus_for(sp) if is_pet else idle.focus_for(sp) if rest else '')
-        self.sim_shell_btn.config(state='normal' if rest and not is_pet and not is_pld else 'disabled')
+        self.sim_focus.config(values=list(pld.FOCUS) if is_pld else list(pup.FOCUS) if is_pet else list(job_sets.FOCUS) if is_job else list(idle.FOCUS))
+        self.sim_focus.set(pld.focus_for(sp) if is_pld else pup.focus_for(sp) if is_pet else job_sets.focus_for(sp, checks.job_of(self.sim_file.get() or '')) if is_job
+                           else idle.focus_for(sp) if rest else '')
+        self.sim_shell_btn.config(state='normal' if rest and not is_pet and not is_pld and not is_job else 'disabled')
         self.sim_dt_hint.config(text=("A Paladin set: judged by the FFXIAH PLD guide's rules for what it is for (enmity, interruption, Phalanx, HP ...). Enemy, TP, buffs and Aftermath don't matter here. " if is_pld else
+                                      "A set judged by what your job uses it for (pick it under 'For'): fast cast, enhancing, enfeebling, songs, rolls, Treasure Hunter, "
+                                      "abilities ... with the game's caps. Enemy, TP, buffs and Aftermath don't matter here. " if is_job else
                                       'An automaton set: judged on the Pet: stats of your gear. These numbers are for you, not the pet. Enemy, TP, buffs and Aftermath don\'t matter here. ' if is_pet else
                                       'An idle set: all 0 = as much as it can get, by what it is for. Enemy, TP, buffs and Aftermath don\'t matter here. ' if rest else
                                       'A TP set: all 0 = keep the damage taken it has now. ' if is_tp else
@@ -3277,6 +3288,10 @@ class App(tk.Tk):
                 its = self.items or checks.Items()
                 if mod is pld:
                     r = pld.judge(set_path, gear, job, sub, cands, counts, its, self._heal_data, need=doctor.need_of(target, sird=True), focus=focus, build=find_best, idle_hp=pld.idle_hp(ld, its, self._heal_data, counts))
+                elif mod is job_sets:
+                    every = job_sets.all_candidates(job, its, self._heal_data) if find_best and job in checks.JOBS else None
+                    r = job_sets.judge(set_path, gear, job, sub, cands, counts, its, self._heal_data, need=doctor.need_of(target, sird=True), focus=focus,
+                                       build=find_best, ideas=every)
                 else:
                     r = pup.judge(set_path, gear, job, sub, cands, counts, its, self._heal_data, need=need, focus=focus, build=find_best)
                 self.after(0, lambda: self._sim_pet_done(path, set_path, r, need, find_best, mod))
@@ -3289,8 +3304,9 @@ class App(tk.Tk):
         self.sim_status.config(text='   '.join(r['notes']))
         names = lambda g: {s: c['name'] for s, c in g.items() if c}  # noqa: E731
         now_gear = names(r['cur'])
-        advice = (lambda n, f: pld.advice(n, f, r.get('idle_hp'))) if mod is pld else pup.advice
-        lines = ['Your set:  ' + mod.words(r['n_now'], r['focus'])]
+        advice = (lambda n, f: pld.advice(n, f, r.get('idle_hp'))) if mod is pld else job_sets.tip if mod is job_sets else pup.advice
+        say = job_sets.say if mod is job_sets else mod.words
+        lines = ['Your set:  ' + say(r['n_now'], r['focus'])]
         self._sim_last = (path, set_path)
         if not find_best:
             tip = advice(r['n_now'], r['focus'])
@@ -3301,18 +3317,20 @@ class App(tk.Tk):
             self.sim_apply_btn.config(state='disabled')
             self.sim_new_btn.config(state='disabled')
             return
-        lines.append('Best:        ' + mod.words(r['n_best'], r['focus']))
+        lines.append('Best:        ' + say(r['n_best'], r['focus']))
         if not r['changes']:
             lines.append('Your set is already the best your gear can do for this.')
         tip = advice(r['n_best'], r['focus'])
         if tip:
             lines.append(tip + '.')
+        if r.get('ideas'):
+            lines.append('Upgrade ideas (gear you don\'t have): ' + ', '.join(f'{name} ({slot})' for slot, name, d in r['ideas']) + '.')
         self.sim_result.config(text='\n'.join(lines))
         marks = list(r['changes'])
         self.sim_grid_now.show(now_gear, {s: '#fbe3c4' for s in marks})
         self.sim_grid_best.show(names(r['best']), {s: '#c8efc0' for s in marks})
         self.sim_best = (path, set_path, r['changes']) if r['changes'] else None
-        self.sim_best_gear = {s: healing.gs_name(c) for s, c in r['best'].items() if c and s not in ('main', 'sub')}
+        self.sim_best_gear = {s: healing.gs_name(c) for s, c in r['best'].items() if c and (s not in ('main', 'sub') or not r.get('keep', True))}
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
         self._sim_view = (now_gear, names(r['best']))
@@ -3390,6 +3408,9 @@ class App(tk.Tk):
             return
         if self.sim_set.get() and pup.is_pet_set(self.sim_set.get(), checks.job_of(self.sim_file.get() or '')):
             self._sim_pet(find_best)
+            return
+        if self.sim_set.get() and job_sets.takes(self.sim_set.get(), checks.job_of(self.sim_file.get() or '')):
+            self._sim_pet(find_best, mod=job_sets)
             return
         if self.sim_set.get() and idle.is_idle(self.sim_set.get()):
             self._sim_idle(find_best)
@@ -4594,6 +4615,7 @@ def selftest(out_path):
                 f = rep['files'][0]
                 out['checkup'] = {'buffs': rep['buffs_text'], 'sets': f['sets'], 'problems': len(f['problems']), 'upgrades': len(f['upgrades']),
                                   'tp_sets': [(u['ws'], u.get('now'), u.get('best')) for u in f['upgrades'] if u.get('kind') == 'tp'],
+                                  'job_sets': len(f.get('job_judged', [])), 'job_coverage': f.get('job_coverage', ''),
                                   'errors': [u['error'] for u in f['upgrades'] if 'error' in u][:3]}
                 break
         # the features (Add features): every one of them on a real file, in the stand-in GearSwap

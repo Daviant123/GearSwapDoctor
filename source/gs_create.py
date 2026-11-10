@@ -59,7 +59,7 @@ RX = [(k, re.compile(rx)) for k, rx in [
     ('div_skill', r'Divine magic skill ?\+(\d+)'), ('ele_skill', r'Elemental magic skill ?\+(\d+)'), ('nin_skill', r'Ninjutsu skill ?\+(\d+)'), ('nin_dmg', r'Ninjutsu damage ?\+(\d+)'), ('blue_skill', r'Blue magic skill ?\+(\d+)'),
     ('sing', r'Singing skill ?\+(\d+)'), ('instr', r'(?:String|Wind) instrument skill ?\+(\d+)'), ('songs', r'All songs ?\+(\d+)'), ('song_dur', r'Song effect duration ?\+(\d+)'), ('song_fast', r'Song spellcasting time ?-(\d+)'),
     ('geo_skill', r'Geomancy skill ?\+(\d+)'), ('geomancy', r'\bGeomancy ?\+(\d+)'), ('bell', r'Handbell skill ?\+(\d+)'), ('indi_dur', r'"?Indicolure"? (?:spell |effect )?duration ?\+(\d+)'), ('smn_skill', r'Summoning magic skill ?\+(\d+)'),
-    ('bp1', r'"Blood Pact" ability delay ?-(\d+)'), ('bp2', r'"Blood Pact" ability delay II ?-(\d+)'), ('perp', r'Avatar perpetuation cost ?-(\d+)'), ('th', r'"Treasure Hunter" ?\+(\d+)'), ('roll', r'"Phantom Roll" effects ?\+(\d+)|Phantom Roll ?\+(\d+)'),
+    ('bp1', r'"Blood Pact" ability delay ?-(\d+)'), ('bp2', r'"Blood Pact" ability delay II ?-(\d+)'), ('perp', r'Avatar perpetuation cost ?-(\d+)'), ('th', r'"Treasure Hunter" ?\+(\d+)'), ('roll', r'"Phantom Roll" ?\+ ?(\d+)(?! *%)|(?<!")Phantom Roll ?\+(\d+)'),
     ('qd', r'"Quick Draw" ?\+(\d+)'), ('snap', r'"Snapshot" ?\+(\d+)'), ('rapid', r'"Rapid Shot" ?\+(\d+)'), ('trueshot', r'"True Shot" ?\+(\d+)'), ('recycle', r'"Recycle" ?\+(\d+)'), ('drain', r'"Drain" and "Aspir" potency ?\+(\d+)'),
     ('dual', r'"Dual Wield" ?\+(\d+)'),
 ]]
