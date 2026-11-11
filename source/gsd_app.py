@@ -57,7 +57,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.24.0'
+VERSION = '2.24.1'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -3294,8 +3294,7 @@ class App(tk.Tk):
         self.cr_status.config(text=f'Created {os.path.basename(path)}. In game, change to {job} (or //gs load {os.path.basename(path)[:-4]}). Build a set and Jobs now work on it.')
         self.cr_create_btn.config(state='disabled')
         self.cr_load()
-        if not getattr(self, 'auto_confirm', False):
-            self.run_check(quiet=True)
+        self._files_changed()
 
     # ------------------------------------------------------------------ Overview
     def _overview_tab(self):
@@ -4649,7 +4648,7 @@ class App(tk.Tk):
             shutil.copy2(os.path.join(folder, f), os.path.join(doctor.GS_DATA, f))
         self.loaded.clear()
         messagebox.showinfo('GearSwap Doctor', 'Put back: ' + ', '.join(files) + '\n\nIn game: //gs reload')
-        self.run_check(quiet=True)
+        self._files_changed()
 
     # ------------------------------------------------------------------ Settings
     def _settings_tab(self):
@@ -5180,17 +5179,41 @@ class App(tk.Tk):
                              else f'   {e[1]}: ' + ', '.join(f'{k} {fixer.item_text(v)}' for k, v in e[2].items()))
         if not self.confirm_changes(by_file):
             return False
-        out = []
+        out, written = [], {}
         for path, edits in by_file.items():
             try:
                 bk, done, failed = fixer.apply(path, edits)
                 out.append(f"{os.path.basename(path)}: {len(done)} changed" + (f", {len(failed)} skipped: " + '; '.join(failed) if failed else ''))
+                written[path] = [e for e in edits if not any(str(e[1]) in f for f in failed)]
             except fixer.EditError as e:
                 out.append(f'{os.path.basename(path)}: not changed - {e}')
         messagebox.showinfo('GearSwap Doctor', '\n'.join(out) + '\n\nIn game: //gs reload (or change job) to use the new sets.')
-        self.loaded.clear()
-        self.run_check(quiet=True)
+        self._files_changed(written)
         return True
+
+    def _files_changed(self, by_file=None):
+        """His request 2026-11-11: "after i save a set or add it to the gearswap the program seems to do an entire recheck of the files, i do not want that to
+        be automatic i want to be able to decide when that happens". No check-up here: the files are read again when needed, the upgrades just written
+        come off the lists, and the status line says the rest of the check-up is from before (Check now when he wants it)."""
+        self.loaded.clear()
+        r = self.report
+        if r and by_file:
+            done = {(os.path.normcase(path), e[1]) for path, edits in by_file.items() for e in edits if e[0] in ('slots', 'priority')}
+            for f in r.get('files', []):
+                key = os.path.normcase(f.get('path', ''))
+                if f.get('upgrades'):
+                    f['upgrades'] = [u for u in f['upgrades'] if (key, u.get('set')) not in done]
+                if f.get('hp_order'):
+                    f['hp_order'] = {k: v for k, v in f['hp_order'].items() if (key, k) not in done}
+            self.rows, self.ticked, self.info = {}, set(), {}
+            for fill in (self.fill_jobs, self.fill_overview, self.fill_upgrades):
+                try:
+                    fill()
+                except Exception:
+                    pass
+            self._update_tick_label()
+        self._stale = True
+        self.status.config(text='Your files changed. The check-up results are from before the change: click Check now when you want them updated.')
 
     def confirm_changes(self, by_file):
         """A clear list of exactly what will change, before anything is written. True = go ahead."""
@@ -5255,7 +5278,7 @@ class App(tk.Tk):
         shutil.move(last, last + '_undone')
         self.loaded.clear()
         messagebox.showinfo('GearSwap Doctor', 'Put back: ' + ', '.join(files))
-        self.run_check(quiet=True)
+        self._files_changed()
 
     # ------------------------------------------------------------------ wsdist version
     def show_ws(self):
