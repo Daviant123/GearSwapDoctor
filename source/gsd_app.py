@@ -39,6 +39,7 @@ import pld      # noqa: E402
 import job_sets  # noqa: E402
 import gear_opt  # noqa: E402
 import shop  # noqa: E402
+import cleanup  # noqa: E402
 import gsd_enemies  # noqa: E402
 import job_guides  # noqa: E402
 import pup      # noqa: E402
@@ -60,7 +61,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.33.0'
+VERSION = '2.34.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -287,6 +288,10 @@ BUFF_HELP = ('What is up while wsdist judges a set. Haste changes a TP set the m
 def am_key(label):
     """'Lv.3' -> '3'."""
     return next((k for k, v in W.AM_CHOICES.items() if v == label), 'auto')
+
+
+CLEAN_SPARE = 'cleanup: gear no set uses (inventory + wardrobes)'
+CLEAN_STORED = 'cleanup: gear your sets name that is in storage'
 
 
 def buff_key(label):
@@ -4805,7 +4810,8 @@ class App(tk.Tk):
         e = ttk.Entry(bar, textvariable=self.gear_q, width=30)
         e.pack(side='left', padx=6)
         self.gear_q.trace_add('write', lambda *a: self.fill_gear())
-        self.gear_bag = ttk.Combobox(bar, values=['all bags', 'equippable (inventory + wardrobes)'], state='readonly', width=34)
+        # (his plan, A5: gear cleanup - two more views: spare gear no set uses, and gear sets name that sits in storage)
+        self.gear_bag = ttk.Combobox(bar, values=['all bags', 'equippable (inventory + wardrobes)', CLEAN_SPARE, CLEAN_STORED], state='readonly', width=46)
         self.gear_bag.set('equippable (inventory + wardrobes)')
         self.gear_bag.pack(side='left', padx=6)
         self.gear_bag.bind('<<ComboboxSelected>>', lambda e: self.fill_gear())
@@ -4818,6 +4824,25 @@ class App(tk.Tk):
     def fill_gear(self):
         t = self.gear_tree
         t.delete(*t.get_children())
+        q = self.gear_q.get().strip().lower()
+        if self.gear_bag.get() in (CLEAN_SPARE, CLEAN_STORED):
+            try:
+                if self.items is None:
+                    self.items = checks.Items()
+                bags = checks.load_bags(self.who.get()) or {}
+                used_ids = cleanup.used_by(doctor.files_for(self.who.get()), self.items, self.loaded_file)
+                sp, st = cleanup.spare(bags, used_ids, self.items), cleanup.stored(bags, used_ids, self.items)
+            except Exception as e:
+                self.gear_info.config(text=f'Could not make the list: {e}')
+                return
+            rows = sp if self.gear_bag.get() == CLEAN_SPARE else st
+            for e in rows:
+                if q and q not in e['name'].lower():
+                    continue
+                note = cleanup.spare_note(e) if rows is sp else cleanup.stored_note(e)
+                t.insert('', 'end', text=e['name'], values=(cleanup.bag_word(e['bag']), e.get('count', ''), note))
+            self.gear_info.config(text=cleanup.summary(sp, st) + ' Suggestions only: nothing is moved.')
+            return
         p = os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')
         try:
             snap = json.load(open(p, encoding='utf-8'))
