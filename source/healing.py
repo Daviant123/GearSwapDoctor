@@ -197,9 +197,13 @@ def candidate(it, data, augments=None):
             quoted[k] = max(quoted.get(k, 0), v)
     info = data.info.get(it['id'], {})
     text = data.text.get(it['id'], '')
+    import hidden
+    for k, v in hidden.named(text, it['en']).items():       # (a number the text hides: Carnwenhan's song duration ...)
+        st.setdefault(k, v)
     # (a JSE earring whose stats are all "Right ear:": nothing in the left ear, so it only goes in the right)
     side = 'ear2' if text.startswith('Right ear:') else 'ear1' if text.startswith('Left ear:') else None
     return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'], 'side': side, 'quoted': quoted,
+            'set': hidden.family(text, it['en']),
             'skill': info.get('skill'), 'shield': info.get('shield', False),
             'two_handed': info.get('skill') in TWO_HANDED and bool(it['slots'] & 1)}
 
@@ -230,9 +234,13 @@ def candidates(owned_items, data, augs=None, real=None):
     really is; an item not in it uses what his files name (augs), as before."""
     out = []
     for it in owned_items:
-        variants = (real or {}).get(it['id']) or (augs or {}).get(it['en'].lower()) or (augs or {}).get(it['enl'].lower()) or [None]
+        seen = (real or {}).get(it['id'])
+        variants = seen or (augs or {}).get(it['en'].lower()) or (augs or {}).get(it['enl'].lower()) or [None]
         for a in variants:
-            out.append(candidate(it, data, a))
+            c = candidate(it, data, a)
+            if seen:                    # (read from the bags: 'copies' = how many different copies of it he has)
+                c['real'], c['copies'] = True, len(seen)
+            out.append(c)
     return out
 
 
@@ -292,17 +300,21 @@ def defaults(job, sub):
 
 
 def totals(gear):
-    """The stats of a set: {slot: candidate}. The Kaykaus set's bonus ("Enhances Cure potency II", 4-10 %: 2 per piece)."""
+    """The stats of a set: {slot: candidate}, with the set bonuses its pieces give together (hidden.py: the Kaykaus set's "Enhances Cure potency II",
+    4-10 %: 2 per piece; artifact armor's accuracy; Souveran's damage taken ...)."""
     t = {}
-    kay = 0
+    sets = False
     for c in gear.values():
         if c:
             add(t, c['stats'])
-            if c['name'].startswith('Kaykaus'):
-                kay += 1
-    if kay >= 2:
-        t['potency2'] = t.get('potency2', 0) + 2 * min(kay, 5)
-        t['set_bonus'] = 2 * min(kay, 5)
+            sets = sets or bool(c.get('set'))
+    if sets:
+        import hidden
+        b = hidden.bonus(gear)
+        if b:
+            add(t, b)
+            if b.get('potency2'):
+                t['set_bonus'] = b['potency2']
     return t
 
 
@@ -583,7 +595,10 @@ def _only_what_helps(kind, best, current, base, spell, need, solace, counts, job
 
 
 def gs_name(c):
-    """How the item goes in a GearSwap file: its name, or {name, augments} when his files tell one copy from another."""
+    """How the item goes in a GearSwap file: its name, or {name, augments} when his files tell one copy from another. A piece read from his bags
+    (real) only gets its augments written when he has two different copies of it: with one copy the name is enough."""
+    if c.get('real') and c.get('copies', 1) < 2:
+        return c['name']
     if c.get('augments'):
         return {'name': c['name'], 'augments': list(c['augments'])}
     return c['name']
@@ -606,8 +621,24 @@ def changes(current, best, keep_weapons=False):
     return out
 
 
-def set_to_gear(gear_of_set, items, data, by_name=None):
-    """A set of a file ({key: {'name', 'augments'}}) as {slot: candidate}. Names that aren't items are left out."""
+def real_copy(item_id, augments, cands):
+    """The copy in his bags a set's entry means (cands made with real=): the one with the same augments; else his only copy (the file's augments are
+    old, or it names none); else the copy that shares the most augments, the first one when the file names none. None: no copy read from the bags."""
+    mine = [c for c in cands or () if c.get('real') and c['id'] == item_id]
+    if not mine:
+        return None
+    want = sorted(str(a) for a in augments or [])
+    for c in mine:
+        if sorted(str(a) for a in c['augments']) == want:
+            return c
+    if len(mine) == 1 or not want:
+        return mine[0]
+    return max(mine, key=lambda c: len(set(want) & {str(a) for a in c['augments']}))
+
+
+def set_to_gear(gear_of_set, items, data, by_name=None, cands=None):
+    """A set of a file ({key: {'name', 'augments'}}) as {slot: candidate}. Names that aren't items are left out. cands: his gear (candidates): a piece
+    whose augments were read from his bags is taken as it really is, whatever the file says about its augments."""
     from gs_loader import SLOTS as GS_SLOTS
     out = {}
     for key, g in gear_of_set.items():
@@ -616,7 +647,12 @@ def set_to_gear(gear_of_set, items, data, by_name=None):
             continue
         found = items.find(g['name'])
         if found:
-            out[slot] = candidate(found[0], data, g.get('augments') or None)
+            mine = None
+            for f in found:
+                mine = real_copy(f['id'], g.get('augments'), cands)
+                if mine:
+                    break
+            out[slot] = mine or candidate(found[0], data, g.get('augments') or None)
     return out
 
 

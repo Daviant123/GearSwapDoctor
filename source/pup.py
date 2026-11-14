@@ -179,7 +179,7 @@ NOTE = "the Doctor can't see your frame, head or attachments: pick what the set 
 def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus=None, build=True):
     """One automaton set, the same shape as idle.judge. Weapons and the animator stay as they are: they're what makes the pet."""
     focus = focus or focus_for(path)
-    cur = healing.set_to_gear(set_gear, items, data)
+    cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     pool = [c for c in cands if any(k.startswith(('pet_', 'm_')) for k in c['stats']) or (focus in BOTH and any(c['stats'].get(k) for k in ('dt', 'pdt', 'mdt', 'dt2', 'pdt2', 'mdt2')))]
     notes = [f'judged for: {focus}', NOTE]
     n0 = numbers(cur)

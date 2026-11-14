@@ -923,7 +923,7 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
                                                       'Quick Draw: damage', 'Quick Draw: accuracy')) else None, song)
     if focus == 'Phantom Roll' and ab == 'Phantom Roll':
         ctx['ability'] = None
-    cur = healing.set_to_gear(set_gear, items, data)
+    cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     notes = [f'judged for: {focus} ({FOCUS[focus]["how"]})']
     away = sorted({c['name'] for c in cur.values() if counts and c['name'] not in counts})
     if away:

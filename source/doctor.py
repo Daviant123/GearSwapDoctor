@@ -474,7 +474,7 @@ def tp_ws_damage(loaded, job, sub, cur, owned_ids, items, index, ws_tp, enemy, b
 _IDLE_DATA = None
 
 
-def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
+def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, real=None):
     """[{set, ws: 'Idle: <set>', kind: 'idle', now, best, gain, unit: 'idle', now_text, best_text, changes, notes, dt...}] for idle sets with a better owned set.
     Not wsdist: idle.py, on the game's item text. targets: the damage taken he set for them (the new set must reach it)."""
     global _IDLE_DATA
@@ -492,7 +492,7 @@ def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
-    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
+    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real)      # (real: checks.load_augments, the gear as it is in his bags)
     out = []
     import pld
     todo = [s for s in idle.checked_sets(loaded, limit=40) if not pld.takes(s['path'], job)][:6]     # (a PLD's tank sets: pld_upgrades)
@@ -529,7 +529,7 @@ def gear_file(path):
     return None
 
 
-def pet_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
+def pet_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, real=None):
     """Automaton sets (pup.py), the same kind of entries as idle_upgrades. kind 'pet'."""
     global _IDLE_DATA
     import healing
@@ -545,7 +545,7 @@ def pet_upgrades(loaded, job, sub, bags, items, targets=None, stats=None):
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
-    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
+    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real)      # (real: checks.load_augments, the gear as it is in his bags)
     out = []
     for s in pup.checked_sets(loaded):
         target = (targets or {}).get(s['path']) or {}
@@ -571,7 +571,7 @@ def need_of(target, sird=False):
     return need
 
 
-def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=None, only=None):
+def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=None, only=None, real=None):
     """A Paladin's tank sets (pld.py: the FFXIAH PLD guide's rules), the same kind of entries as idle_upgrades. kind 'pld'."""
     global _IDLE_DATA
     import healing
@@ -587,7 +587,7 @@ def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
-    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]))
+    cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real)      # (real: checks.load_augments, the gear as it is in his bags)
     ihp = pld.idle_hp(loaded, items, _IDLE_DATA, counts)
     out, done = [], {}
     for s in pld.checked_sets(loaded, limit):
@@ -633,11 +633,11 @@ def _owned_cands(loaded, job, bags, items, real=None):
     return healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real), counts
 
 
-def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=None, ideas=True, progress=None):
+def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=None, ideas=True, progress=None, real=None):
     """Every other set of the job (job_sets.py: fast cast, enhancing, enfeebling, songs, rolls, Quick Draw, TH, Blood Pacts, Ready, BLU skill / cures,
     ability sets ...), judged by what that set is for. The same kind of entries as pld_upgrades; kind 'jobset'."""
     import job_sets
-    cands, counts = _owned_cands(loaded, job, bags, items)
+    cands, counts = _owned_cands(loaded, job, bags, items, real)
     every = job_sets.all_candidates(job, items, _IDLE_DATA) if ideas and job in checks.JOBS else None
     out, done = [], {}
     rows = job_sets.checked_sets(loaded, job)
@@ -688,14 +688,15 @@ def replan(character, path, set_path, sub, target):
     loaded = gs_loader.load(path)
     items = checks.Items()
     bags = checks.load_bags(character) or {}
+    real = checks.load_augments(character)
     tg = {set_path: target} if target else {}
     if pld.takes(set_path, job):
-        return pld_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path)
+        return pld_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path, real=real)
     if idle.is_idle(set_path):
-        return [u for u in idle_upgrades(loaded, job, sub, bags, items, targets=tg) if u['set'] == set_path]
+        return [u for u in idle_upgrades(loaded, job, sub, bags, items, targets=tg, real=real) if u['set'] == set_path]
     import job_sets
     if job_sets.takes(set_path, job):
-        return job_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path)
+        return job_upgrades(loaded, job, sub, bags, items, targets=tg, only=set_path, real=real)
     return None
 
 
@@ -990,6 +991,7 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
     spec = W.buff_spec(buffs, buffs_custom, aftermath)
     items = checks.Items()
     bags = checks.load_bags(character)
+    real = checks.load_augments(character)          # (augments on his gear, as Steward saved them: the item-text judges use them)
     report = {'character': character, 'time': int(time.time()), 'bags_time': bags.get('_time') if bags else None,
               'tp': tp, 'enemy': enemy, 'tp_sets': tp_sets, 'ws_tp': ws_tp, 'tp_metric': tp_metric, 'buffs': buffs,
               'buffs_text': W.buff_text(buffs), 'buffs_spec': spec, 'aftermath': aftermath,
@@ -1040,25 +1042,25 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
                                                     buffs=spec, stats=mstats)
                 entry['magic_judged'] = mstats.get('judged', [])
             idle_stats = {}
-            entry['upgrades'] += idle_upgrades(loaded, job, js, bags, items, targets=tg, stats=idle_stats)
+            entry['upgrades'] += idle_upgrades(loaded, job, js, bags, items, targets=tg, stats=idle_stats, real=real)
             if job == 'PLD':
                 pld_stats = {}
                 if progress:
                     progress('the PLD guide: tank sets')
-                entry['upgrades'] += pld_upgrades(loaded, job, js, bags, items, targets=tg, stats=pld_stats)
+                entry['upgrades'] += pld_upgrades(loaded, job, js, bags, items, targets=tg, stats=pld_stats, real=real)
                 entry['pld_judged'] = pld_stats.get('judged', [])
                 import pld
                 entry['pld_coverage'] = pld.coverage_text(pld.coverage(loaded), len(entry['pld_judged']))
             job_stats = {}
             if progress:
                 progress('job sets: what each set is for')
-            entry['upgrades'] += job_upgrades(loaded, job, js, bags, items, targets=tg, stats=job_stats, progress=progress)
+            entry['upgrades'] += job_upgrades(loaded, job, js, bags, items, targets=tg, stats=job_stats, progress=progress, real=real)
             entry['job_judged'] = job_stats.get('judged', [])
             import job_sets
             entry['job_coverage'] = job_sets.coverage_text(job_sets.coverage(loaded, job), len(entry['job_judged']))
             if job == 'PUP':
                 pet_stats = {}
-                entry['upgrades'] += pet_upgrades(loaded, job, js, bags, items, targets=tg, stats=pet_stats)
+                entry['upgrades'] += pet_upgrades(loaded, job, js, bags, items, targets=tg, stats=pet_stats, real=real)
                 entry['pet_judged'] = pet_stats.get('judged', [])
             entry['judged'] = ws_stats.get('judged', []) + tp_stats.get('judged', [])
             entry['idle_judged'] = idle_stats.get('judged', [])

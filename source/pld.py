@@ -390,7 +390,7 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     """One PLD set, the same shape as pup.judge. idle_hp: the HP of the sets you stand in (standing_hp): a swap set should have at least that much.
     counts: what's in the inventory and wardrobes; an item that isn't (in storage, not owned) isn't worn by GearSwap, so it's left out of "now"."""
     focus = focus or focus_for(path) or 'Tank, standing'
-    cur = healing.set_to_gear(set_gear, items, data)
+    cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     notes = [f'judged for: {focus}', NOTE]
     away = sorted({c['name'] for c in cur.values() if counts and c['name'] not in counts})
     if away:

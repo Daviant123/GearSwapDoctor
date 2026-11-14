@@ -123,7 +123,7 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     keep_weapons None: a job that fights keeps them (a new weapon throws TP away), a mage may change them."""
     focus = focus or focus_for(path)
     base = {'mp': has_mp(job, sub), 'shell': shell}
-    cur = healing.set_to_gear(set_gear, items, data)
+    cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     keys = {k.lower() for k in set_gear}
     keep = keep_weapons if keep_weapons is not None else (job or '').upper() not in healing.MAGE_JOBS
     # (anything in the range slot stays, and an instrument or bell there leaves no room for ammo)

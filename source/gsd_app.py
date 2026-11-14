@@ -57,7 +57,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.26.0'
+VERSION = '2.27.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2795,7 +2795,7 @@ class App(tk.Tk):
                         counts[n] = counts.get(n, 0) + c
         except (OSError, ValueError):
             pass
-        return healing.candidates(owned, self._heal_data, healing.known_augments(loaded)), counts
+        return healing.candidates(owned, self._heal_data, healing.known_augments(loaded), checks.load_augments(self.who.get())), counts
 
     def heal_load(self, keep_sub=False):
         self._heal_dirty = False
@@ -2901,8 +2901,8 @@ class App(tk.Tk):
         spell = self.heal_spell.get() or None
         need = {k: v for k, v in self._heal_values(self.heal_need).items() if v}
         keep, solace, kind = bool(self.heal_keep.get()), bool(self.heal_solace.get()), rec['kind']
-        cur = healing.set_to_gear(rec['gear'], self.items, self._heal_data)
         cands, counts = self._heal_cands(job)
+        cur = healing.set_to_gear(rec['gear'], self.items, self._heal_data, cands=cands)
         if not cands:
             self.heal_status.config(text='No saved bags for this character yet: Check now makes the list (from Steward or findAll).')
             return
@@ -3210,7 +3210,7 @@ class App(tk.Tk):
                 ids, bags = self._cr_ids()
                 snap = {b: {items.by_id[i]['en']: n for i, n in c.items() if i in items.by_id} for b, c in bags.items() if not b.startswith('_')}
                 owned = features.owned_items(items, snap, job)
-                cands = healing.candidates(owned, data, healing.known_augments(self.cr_load_files))
+                cands = healing.candidates(owned, data, healing.known_augments(self.cr_load_files), checks.load_augments(who))
                 counts = {}
                 for b, c in snap.items():
                     if b in checks.EQUIP_BAGS:
@@ -4281,7 +4281,7 @@ class App(tk.Tk):
                 gear = next(s['gear'] for s in ld.sets if s['path'] == set_path)
                 cands, counts = self._heal_cands(job)
                 its = self.items or checks.Items()
-                cur = healing.set_to_gear(gear, its, self._heal_data)
+                cur = healing.set_to_gear(gear, its, self._heal_data, cands=cands)
                 pool = [c for c in cands if any(c['stats'].get(k) for k in gs_create.POINTS[kind])]
                 if find_best:
                     best, val, now = healing.build('points', pool, cur, {}, job, sub, spell=kind, need=need, keep_weapons=True, counts=counts)
