@@ -505,7 +505,7 @@ def _allowed(gear, slot, c, counts, job, sub):
 def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weapons=False, solace=False, counts=None, only_slots=None):
     """The best set. cands: [candidate]; current: {slot: candidate}. Returns (best {slot: candidate}, best number, the
     number of the set now). Starts from the set as it is and from nothing; one swap at a time, then two together when
-    one alone doesn't help."""
+    one alone doesn't help; then a wider look from more starting points (whole set-bonus families, each slot's own best)."""
     counts = counts or {}
     import job_rules
     no_ammo = job_rules.lock_ammo(job)                      # (a COR's or RNG's gun comes off with the wrong ammo)
@@ -537,8 +537,9 @@ def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weap
                 if _need_value(pick['stats'], need) > 0:
                     g[s] = pick
         starts.append(g)
-    for start in starts:
-        g = dict(start)
+    def climb(g, pairs=True):
+        """Swap one piece at a time while that helps; then (pairs) two together; until nothing does."""
+        g = dict(g)
         cur_s = score(kind, g, base, spell, need, solace)
         for _ in range(60):
             improved = False
@@ -553,6 +554,8 @@ def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weap
                         g, cur_s, improved = t, sc, True
             if improved:
                 continue
+            if not pairs:
+                break
             for i, s1 in enumerate(slots):                  # two pieces together
                 for s2 in slots[i + 1:]:
                     for c1 in per_slot[s1]:
@@ -574,7 +577,46 @@ def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weap
                                 t1[s1] = g.get(s1)
             if not improved:
                 break
+        return g, cur_s
+
+    for start in starts:
+        g, cur_s = climb(start)
         if best_s is None or cur_s > best_s:
+            best_set, best_s = g, cur_s
+    # A wider look (PLAN.md E2, 2026-11-14): one or two swaps can't reach a set bonus that only pays with three or more pieces, or a set that is
+    # only better once several slots change together. So more starting points, each climbed one swap at a time (quick), and only one that ends
+    # above the best so far gets the full climb. The same gear always gives the same answer: the starts are made in a fixed order.
+    extra = []
+    fam = {}
+    for sl in slots:                                        # (a) every piece of a set he has two or more pieces of
+        for c in per_slot[sl]:
+            if c and c.get('set'):
+                fam.setdefault(c['set'], {}).setdefault(sl, c)
+    for k in sorted(fam, key=lambda k: (-len(fam[k]), k))[:4]:
+        if len(fam[k]) >= 2:
+            g = dict(best_set)
+            for sl, c in fam[k].items():
+                if _allowed(g, sl, c, counts, job, sub):
+                    g[sl] = c
+            extra.append(g)
+    g = dict(fixed)                                         # (b) each slot's own best piece, picked on its own from nothing
+    s0 = score(kind, g, base, spell, need, solace)
+    for sl in slots:
+        top, top_s = None, s0
+        for c in per_slot[sl]:
+            if c and _allowed(g, sl, c, counts, job, sub):
+                t = dict(fixed)
+                t[sl] = c
+                sc = score(kind, t, base, spell, need, solace)
+                if sc > top_s + 1e-9:
+                    top, top_s = c, sc
+        if top and _allowed(g, sl, top, counts, job, sub):
+            g[sl] = top
+    extra.append(g)
+    for start in extra:
+        g, cur_s = climb(start, pairs=False)
+        if cur_s > best_s + 1e-9:
+            g, cur_s = climb(g)
             best_set, best_s = g, cur_s
     best_set = _only_what_helps(kind, best_set, current, base, spell, need, solace, counts, job, sub, slots)
     best_set = {s: c for s, c in best_set.items() if c}

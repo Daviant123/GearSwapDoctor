@@ -58,7 +58,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.28.0'
+VERSION = '2.29.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2299,6 +2299,11 @@ class App(tk.Tk):
         cands, counts = self._opt_owned()
         targets = (self.cfg.get('dt_targets') or {}).get(os.path.basename(self._opt_path)) or {}
         real.ENEMY = self.cfg.get('enemy', 'Apex Toad')       # (what a spell does is worked out against the monster he picked)
+        try:
+            import wsdist_runner as _W
+            real.BUFFS = _W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), str(self.cfg.get('aftermath', 'auto'))) if self.ws_ready else None
+        except Exception:
+            real.BUFFS = None
         self.opt_ctx = gear_opt.Ctx(self._opt_ld, job, self.opt_sub.get(), cands, counts, self.items, self._heal_data, targets=targets,
                                     cap_dt=bool(self.opt_cap.get()), weapons=self._opt_weapons())
         self._opt_sig = sig

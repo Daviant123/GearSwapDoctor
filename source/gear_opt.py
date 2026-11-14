@@ -297,7 +297,7 @@ def judge(row, ctx, focus=None, build=True):
     gear = with_weapons(row['gear'], ctx.weapons)
     key = (row['judge'], focus, tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in gear.items())),
            tuple(sorted(need.items())), row['path'].startswith('sets.buff'), build, ctx.ihp,
-           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None, real.spell_of(row['path']) if row['judge'] == 'job' else None, real.ENEMY)
+           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None, real.spell_of(row['path']) if row['judge'] == 'job' else None, real.ENEMY, repr(real.BUFFS))
     if key in ctx._cache:
         return ctx._cache[key]
     a = (row['path'], gear, ctx.job, ctx.sub, ctx.cands, ctx.counts, ctx.items, ctx.data)

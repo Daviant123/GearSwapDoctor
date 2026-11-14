@@ -766,6 +766,12 @@ def numbers(gear, focus, ctx=None):
         if hit is not None:
             n['real'], n['real_value'] = 'Phalanx', hit
             n['real_words'] = f"Phalanx -{hit} a hit (Enhancing skill {real.ENH_BASE[job] + t.get('enh_skill', 0)}, gear +{t.get('phalanx', 0)})"
+    elif ctx.get('hit'):
+        kind, base = ctx['hit']
+        h = real.hit(kind, base, gear, t.get('step_acc', 0) if focus == 'Steps' else 0)
+        apts = f['pts'].get('racc' if kind == 'ranged' else 'acc', 1)
+        # (1 % of hits is 2 accuracy: it weighs what 2 accuracy weighed for this kind of set, until the cap)
+        n['real'], n['real_value'], n['real_words'], n['real_weight'] = 'Hit rate', h['value'], h['words'], 2 * apts
     elif ctx.get('spell'):
         e = real.enfeeble(ctx['spell'], t.get('enf_skill', 0), t.get('MND', 0), t.get('enf_eff', 0), job, sub)
         if e:
@@ -779,7 +785,7 @@ def _pts(f, c):
         return f['pts'], 0
     import real
     gone = real.REPLACES[c['real']]
-    return {k: p for k, p in f['pts'].items() if k not in gone}, real.WEIGHT[c['real']] * c['real_value']
+    return {k: p for k, p in f['pts'].items() if k not in gone}, c.get('real_weight', real.WEIGHT.get(c['real'], 1)) * c['real_value']
 
 
 def capped(n, focus):
@@ -952,11 +958,29 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
                                                       'Quick Draw: damage', 'Quick Draw: accuracy')) else None, song)
     if focus == 'Phantom Roll' and ab == 'Phantom Roll':
         ctx['ability'] = None
+    if focus.startswith('Ranged shots') or focus == 'Steps':                      # (how often it hits the picked monster: real.py)
+        import real
+        kind = 'ranged' if focus.startswith('Ranged') else 'melee'
+        cur0 = healing.set_to_gear(set_gear, items, data)
+        weapons = [(s, cur0[s]['name']) for s in real.WEAPON_SLOTS if cur0.get(s)]
+        if kind == 'ranged' and not cur0.get('range'):         # (his shooting sets don't name the gun: his best one stands in)
+            guns = [c for c in cands if healing.fits(c, 'range') and c.get('skill') in (25, 26)]
+            if guns:
+                weapons.append(('range', max(guns, key=lambda c: (c['stats'].get('racc', 0), c['id']))['name']))
+        has = any(s_ == ('range' if kind == 'ranged' else 'main') for s_, _ in weapons)      # (no weapon named: nothing to work accuracy out from)
+        base = real.acc_base(job, sub, weapons) if has else None
+        if base and real.hit(kind, base, cur0)['value'] > 20:        # (at the 20 % floor nothing would count: points lead the way up from there)
+            ctx['hit'] = (kind, base)
+            notes_hit = [n for s_, n in weapons if s_ == 'range' and not cur0.get('range')]
+        else:
+            notes_hit = []
     if focus.startswith('Enfeebling') and focus != 'Enfeebling (accuracy)':      # (a set for one spell whose strength has a formula: real.py)
         import real
         ctx['spell'] = real.spell_of(path)
     cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     notes = [f'judged for: {focus} ({FOCUS[focus]["how"]})']
+    if ctx.get('hit') and locals().get('notes_hit'):
+        notes.append(f"hit rate worked out with your {notes_hit[0]} (the set doesn't name a gun or bow)")
     away = sorted({c['name'] for c in cur.values() if counts and c['name'] not in counts})
     if away:
         cur = {s: c for s, c in cur.items() if c['name'] not in away}
