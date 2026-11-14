@@ -40,6 +40,7 @@ import job_sets  # noqa: E402
 import gear_opt  # noqa: E402
 import job_guides  # noqa: E402
 import pup      # noqa: E402
+import real     # noqa: E402
 import real_fights  # noqa: E402
 import rema     # noqa: E402
 import checks   # noqa: E402
@@ -57,7 +58,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.27.0'
+VERSION = '2.28.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2297,6 +2298,7 @@ class App(tk.Tk):
         job = self._opt_job()
         cands, counts = self._opt_owned()
         targets = (self.cfg.get('dt_targets') or {}).get(os.path.basename(self._opt_path)) or {}
+        real.ENEMY = self.cfg.get('enemy', 'Apex Toad')       # (what a spell does is worked out against the monster he picked)
         self.opt_ctx = gear_opt.Ctx(self._opt_ld, job, self.opt_sub.get(), cands, counts, self.items, self._heal_data, targets=targets,
                                     cap_dt=bool(self.opt_cap.get()), weapons=self._opt_weapons())
         self._opt_sig = sig
@@ -2477,7 +2479,11 @@ class App(tk.Tk):
         tx.config(state='normal')
         tx.delete('1.0', 'end')
         tx.insert('end', 'What it is for\n', 'h')
-        tx.insert('end', (gear_opt.why_text(r, job) or '-') + '\n\n')
+        tx.insert('end', (gear_opt.why_text(r, job) or '-') + '\n')
+        if r.get('judge'):                                # (real results or points: PLAN.md E1 "say which is which")
+            real.ENEMY = self.cfg.get('enemy', 'Apex Toad')
+            tx.insert('end', gear_opt.basis(r, job)[1] + '\n')
+        tx.insert('end', '\n')
         if r.get('error'):
             tx.insert('end', 'Could not judge it: ' + r['error'] + '\n')
         elif res:

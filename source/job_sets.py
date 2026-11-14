@@ -723,8 +723,8 @@ def th_cap(job, sub):
 SNAP_GEAR_CAP = 60          # (70 % in all, 10 from 5/5 merits)
 
 
-def ctx_for(job, sub, ability=None, song=None):
-    return {'job': (job or '').upper(), 'sub': (sub or '').upper(), 'ability': ability, 'song': song}
+def ctx_for(job, sub, ability=None, song=None, spell=None):
+    return {'job': (job or '').upper(), 'sub': (sub or '').upper(), 'ability': ability, 'song': song, 'spell': spell}
 
 
 def numbers(gear, focus, ctx=None):
@@ -759,7 +759,27 @@ def numbers(gear, focus, ctx=None):
     n['ability'] = a
     n['hp'] = sum(pld.hp_of(c) for c in gear.values() if c)
     n['ds_absorb'] = round((pld.BASE_HP + n['hp']) * 0.5 * (1 + t.get('ds_pot', 0) / 100))
+    # real results where a formula is known (real.py, PLAN.md E1): the points of the stats it stands for are dropped in value()
+    import real
+    if focus == 'Phalanx':
+        hit = real.phalanx_hit(job, t.get('enh_skill', 0), t.get('phalanx', 0))
+        if hit is not None:
+            n['real'], n['real_value'] = 'Phalanx', hit
+            n['real_words'] = f"Phalanx -{hit} a hit (Enhancing skill {real.ENH_BASE[job] + t.get('enh_skill', 0)}, gear +{t.get('phalanx', 0)})"
+    elif ctx.get('spell'):
+        e = real.enfeeble(ctx['spell'], t.get('enf_skill', 0), t.get('MND', 0), t.get('enf_eff', 0), job, sub)
+        if e:
+            n['real'], n['real_value'], n['real_words'] = ctx['spell'], e['value'], e['words']
     return n
+
+
+def _pts(f, c):
+    """(points per stat, extra points) for a set's numbers: a real result takes the place of the stats it is worked out from."""
+    if not c.get('real'):
+        return f['pts'], 0
+    import real
+    gone = real.REPLACES[c['real']]
+    return {k: p for k, p in f['pts'].items() if k not in gone}, real.WEIGHT[c['real']] * c['real_value']
 
 
 def capped(n, focus):
@@ -787,7 +807,8 @@ def value(gear, focus):
         focus, ctx = focus
     f = FOCUS.get(focus) or FOCUS['Ability']
     c = capped(numbers(gear, focus, ctx), focus)
-    v = sum(p * c.get(k, 0) for k, p in f['pts'].items())
+    pts, extra = _pts(f, c)
+    v = sum(p * c.get(k, 0) for k, p in pts.items()) + extra
     return round(v, 3)
 
 
@@ -801,14 +822,22 @@ def main_value(gear, focus):
     keys = set(f['show']) | ({'jan'} if 'ja' in f['show'] else set()) | ({'song_one'} if 'songs' in f['show'] else set())
     if 'phys' in keys:
         keys.add('magic')
-    return round(sum(p * c.get(k, 0) for k, p in f['pts'].items() if k in keys), 3)
+    pts, extra = _pts(f, c)
+    return round(sum(p * c.get(k, 0) for k, p in pts.items() if k in keys) + extra, 3)
 
 
 def words(n, focus=None):
     """'Fast Cast 64 % of 80, Quick Magic 2 %': what matters for the set."""
     f = FOCUS.get(focus or '') or FOCUS['Ability']
     out = []
+    gone = ()
+    if n.get('real'):                       # (the real result first; the stats it is worked out from aren't listed again)
+        import real
+        out.append(n['real_words'])
+        gone = real.REPLACES[n['real']]
     for k in f['show']:
+        if k in gone:
+            continue
         v = n.get(k, 0)
         if k == 'ja':
             if n.get('ability'):
@@ -923,6 +952,9 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
                                                       'Quick Draw: damage', 'Quick Draw: accuracy')) else None, song)
     if focus == 'Phantom Roll' and ab == 'Phantom Roll':
         ctx['ability'] = None
+    if focus.startswith('Enfeebling') and focus != 'Enfeebling (accuracy)':      # (a set for one spell whose strength has a formula: real.py)
+        import real
+        ctx['spell'] = real.spell_of(path)
     cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     notes = [f'judged for: {focus} ({FOCUS[focus]["how"]})']
     away = sorted({c['name'] for c in cur.values() if counts and c['name'] not in counts})

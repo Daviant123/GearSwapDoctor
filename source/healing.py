@@ -147,6 +147,18 @@ def add(a, b):
     return a
 
 
+# "All magic skills +8" (Stikini Ring), "Magic skills +10" (Incanter's Torque): every magic skill at once, so no single skill's words match it
+ALL_SKILLS_RX = re.compile(r'(?:All magic|(?<![a-z] )Magic) skills ?\+(\d+)')
+MAGIC_SKILLS = ('skill', 'enh_skill', 'enf_skill', 'dark_skill', 'div_skill', 'ele_skill', 'nin_skill', 'blue_skill', 'sing', 'instr', 'geo_skill', 'bell', 'smn_skill')
+
+
+def all_skills(text):
+    """{every magic skill: n} for a text that raises them all."""
+    m = CUT_RX.search(text or '')
+    n = sum(int(x) for x in ALL_SKILLS_RX.findall((text or '')[:m.start()] if m else (text or '')))
+    return {k: n for k in MAGIC_SKILLS} if n else {}
+
+
 class ItemData:
     """Every item's text and its kind of weapon (Windower's res folder; read once)."""
     def __init__(self, res_folder=None):
@@ -184,6 +196,7 @@ def candidate(it, data, augments=None):
     add(st, pld.parse(data.text.get(it['id'], '')))         # (a tank's: Phalanx, enmity kept when hit ...)
     import job_sets
     add(st, job_sets.parse(data.text.get(it['id'], '')))    # (every job's sets: rolls, casting times, Stoneskin ...)
+    add(st, all_skills(data.text.get(it['id'], '')))
     if it['en'].lower() in job_sets.FAST_NAMED and st.get('fast') == 2:
         st['fast'] = job_sets.FAST_NAMED[it['en'].lower()]
     quoted = job_sets.quoted(data.text.get(it['id'], ''))   # (the abilities its text names: "Chain Affinity"+24, Enhances "Diffusion" effect)
@@ -193,6 +206,7 @@ def candidate(it, data, augments=None):
         add(st, gs_create.parse(str(a)))
         add(st, pld.parse(str(a)))
         add(st, job_sets.parse(str(a)))
+        add(st, all_skills(str(a)))
         for k, v in job_sets.quoted(str(a)).items():
             quoted[k] = max(quoted.get(k, 0), v)
     info = data.info.get(it['id'], {})

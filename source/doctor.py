@@ -637,6 +637,7 @@ def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=N
     """Every other set of the job (job_sets.py: fast cast, enhancing, enfeebling, songs, rolls, Quick Draw, TH, Blood Pacts, Ready, BLU skill / cures,
     ability sets ...), judged by what that set is for. The same kind of entries as pld_upgrades; kind 'jobset'."""
     import job_sets
+    import real as real_results
     cands, counts = _owned_cands(loaded, job, bags, items, real)
     every = job_sets.all_candidates(job, items, _IDLE_DATA) if ideas and job in checks.JOBS else None
     out, done = [], {}
@@ -648,7 +649,7 @@ def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=N
             progress(f'job sets {i + 1} of {len(rows)}')
         target = (targets or {}).get(s['path']) or {}
         need = need_of(target, sird=True)
-        key = (job_sets.focus_for(s['path'], job), job_sets.ability_of(s['path']), tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in s['gear'].items())),
+        key = (job_sets.focus_for(s['path'], job), job_sets.ability_of(s['path']), real_results.spell_of(s['path']), tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in s['gear'].items())),
                tuple(sorted(need.items())))
         try:
             if key in done:
@@ -991,6 +992,8 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
     spec = W.buff_spec(buffs, buffs_custom, aftermath)
     items = checks.Items()
     bags = checks.load_bags(character)
+    import real as real_results
+    real_results.ENEMY = enemy                      # (what a spell does is worked out against the monster he picked)
     real = checks.load_augments(character)          # (augments on his gear, as Steward saved them: the item-text judges use them)
     report = {'character': character, 'time': int(time.time()), 'bags_time': bags.get('_time') if bags else None,
               'tp': tp, 'enemy': enemy, 'tp_sets': tp_sets, 'ws_tp': ws_tp, 'tp_metric': tp_metric, 'buffs': buffs,

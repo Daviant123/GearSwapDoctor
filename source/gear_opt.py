@@ -15,6 +15,7 @@ import healing
 import idle
 import job_guides
 import job_sets
+import real
 import pld
 
 # ------------------------------------------------------------------ what a job is for (research: RESEARCH.md "Paladin, more guides (2026-11-10)")
@@ -41,6 +42,11 @@ GENERIC = {'title': 'Every set, judged by what it is for',
 def role(job):
     job = (job or '').upper()
     return ROLE.get(job) or job_guides.ROLE.get(job) or GENERIC
+
+
+def basis(row, job):
+    """('real' | 'points', a line): whether this set is scored by real results or by points (PLAN.md E1), for the tab."""
+    return real.basis(row['judge'], row.get('picked') or row['focus'], row['path'], job)
 
 
 def why_text(row, job):
@@ -291,7 +297,7 @@ def judge(row, ctx, focus=None, build=True):
     gear = with_weapons(row['gear'], ctx.weapons)
     key = (row['judge'], focus, tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in gear.items())),
            tuple(sorted(need.items())), row['path'].startswith('sets.buff'), build, ctx.ihp,
-           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None)
+           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None, real.spell_of(row['path']) if row['judge'] == 'job' else None, real.ENEMY)
     if key in ctx._cache:
         return ctx._cache[key]
     a = (row['path'], gear, ctx.job, ctx.sub, ctx.cands, ctx.counts, ctx.items, ctx.data)
