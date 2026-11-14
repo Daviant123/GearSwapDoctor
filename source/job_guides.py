@@ -56,6 +56,78 @@ ROLE = {
     },
 }
 
+# the other 17 jobs (PLAN.md A2, 2026-11-14): role, what matters and the order of the groups, from BG Wiki's community guides where they have content
+ROLE.update({
+    'WHM': {'title': 'White Mage: the healer',
+          'text': 'A White Mage keeps the party alive: Cure first. Cure potency to 50 % (then Cure potency II), Ebers Pantaloons in every cure set (MP back), Afflatus Solace gear for single cures and not for Curaga, Cursna by Healing skill and Cursna+ gear, Regen by Piety Bliaut (potency) and Ebers Mitts (duration), Barspells and Stoneskin by Enhancing skill to 500. Fast Cast to 80 % (20 % comes from merits for cures).',
+          'order': ['Cures', 'Enhancing', 'Casting fast', 'Staying alive', 'Job abilities', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community White Mage Guide'},
+    'BRD': {'title': 'Bard: songs for the party',
+          'text': 'A Bard\'s songs are its job: "All Songs +" (Gjallarhorn +4, Linos +3) and each song\'s own piece make them stronger, song duration pieces (Carnwenhan +50 %) make them last, a dummy song set is kept weak on purpose, Lullaby and other debuffs need magic accuracy and skill. Fast Cast with song casting time to 80 %. The instrument is never changed here: it decides how many songs you hold.',
+          'order': ['Songs', 'Casting fast', 'Staying alive', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Bard Guide'},
+    'GEO': {'title': 'Geomancer: bubbles, and nukes',
+          'text': "A Geomancer's bubbles are its job: Geomancy and Handbell skill (900 together is the usual goal), Indi duration, and gear that keeps the luopan alive (pet damage taken, pet Regen) while you stand idle. Then nukes and magic bursts (wsdist), Fast Cast to 80 %.",
+          'order': ['Geomancy', 'Casting fast', 'Staying alive', 'Nukes and blue magic damage', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': "BG Wiki's community guide for this job is an empty page, so this uses the item text and the general rules; BG Wiki Geomancy pages"},
+    'SCH': {'title': 'Scholar: support mage, nukes and skillchains',
+          'text': "A Scholar heals with Regen V (Arbatel Bonnet for potency, long duration with Perpetuance and Arbatel Bracers), buffs with Enhancing duration, nukes and magic bursts off its own Immanence skillchains (wsdist). Fast Cast to 80 %, with Grimoire casting time on top (Pedagogy Mortarboard, Academic's Loafers). Sublimation has its own idle set.",
+          'order': ['Enhancing', 'Cures', 'Nukes and blue magic damage', 'Casting fast', 'Enfeebling', 'Staying alive', 'Job abilities', 'Dark magic', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Scholar Guide'},
+    'RUN': {'title': 'Rune Fencer: the magic tank',
+          'text': 'A Rune Fencer tanks, best against magic: damage taken capped with high Magic Evasion, enmity for Flash and Foil, spells not interrupted (102 % with 5/5 merits), Phalanx by Enhancing skill and Phalanx+ gear, parrying gear (Turms, Futhark Torque). Fast Cast to 80 % (Inspiration adds more but can be dispelled, so gear should cap alone). Each rune ability has its own piece.',
+          'order': ['Staying alive', 'Holding hate', 'Enhancing', 'Casting fast', 'Job abilities', 'Cures', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Rune Fencer Guide'},
+    'THF': {'title': 'Thief: damage, Treasure Hunter, hate control',
+          'text': "A Thief deals damage with daggers (wsdist) and brings Treasure Hunter: +8 with the trait is all that counts from gear, more is wasted. Sneak Attack (DEX) and Trick Attack (AGI) sets go on for the weapon skill; Skulker's and Plunderer's pieces boost Sneak Attack, Trick Attack, Feint, Despoil, Steal, Hide.",
+          'order': ['Job abilities', 'Weapon skills', 'Fighting (damage)', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Thief Guide'},
+    'NIN': {'title': 'Ninja: damage, shadows, magic bursts',
+          'text': 'A Ninja deals damage (wsdist), keeps shadows up (Utsusemi: Fast Cast and "Utsusemi" casting time, shadow pieces), lands ninjutsu debuffs (Ninjutsu skill, magic accuracy) and bursts elemental ninjutsu.',
+          'order': ['Ninjutsu', 'Casting fast', 'Weapon skills', 'Fighting (damage)', 'Staying alive', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': "BG Wiki's community guide for this job is an empty page, so this uses the item text and the general rules"},
+    'WAR': {'title': 'Warrior: damage',
+          'text': "A Warrior deals damage: weapon skills and TP sets first (wsdist). Each ability has its piece: Pummeler's Lorica and Agoge Calligae (Berserk), Agoge Mask (Warcry), Agoge Lorica and Pummeler's Mask (Aggressor), Boii Calligae (Mighty Strikes, Retaliation), Boii Lorica (Blood Rage). Standing still: damage taken to 50 %.",
+          'order': ['Weapon skills', 'Fighting (damage)', 'Job abilities', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Warrior Guide'},
+    'MNK': {'title': 'Monk: damage',
+          'text': "A Monk deals damage (wsdist). Its ability pieces: Anchorite's Cyclas and Hesychast's Gloves (Chakra, with VIT), Anchorite's Crown (Focus), Anchorite's Gaiters (Dodge), Hesychast's Gaiters (Counterstance, Mantra), Bhikku Crown (Perfect Counter), Bhikku Gaiters (Footwork), Hesychast's Hose (Hundred Fists). Subtle Blow stops at 50 (+25 of Subtle Blow II).",
+          'order': ['Weapon skills', 'Fighting (damage)', 'Job abilities', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Monk Guide'},
+    'SAM': {'title': 'Samurai: weapon skills and skillchains',
+          'text': 'A Samurai deals damage through weapon skills (wsdist): Store TP to reach the next weapon skill in fewer hits. Ability pieces: Wakido Kabuto (Meditate ticks, Warding Circle), Sakonji Kote (Meditate duration, Blade Bash), Wakido Kote and Kasuga Haidate (Hasso), Sakonji Haidate (Seigan, Shikikoyo).',
+          'order': ['Weapon skills', 'Fighting (damage)', 'Job abilities', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Samurai Guide'},
+    'DRG': {'title': 'Dragoon: damage, with a wyvern',
+          'text': "A Dragoon deals damage (wsdist). Jumps give TP: Vishap Mail and Finger Gauntlets (TP for every jump), Peltast's Schynbalds (Spirit Jump). Wyvern pieces: Pteroslaver Armet (Healing Breath, Deep Breathing), Vishap Armet and Peltast's Vambraces (Spirit Link), Pteroslaver Mail (Spirit Surge), Pteroslaver Finger Gauntlets (Angon), Vishap Brais (Ancient Circle).",
+          'order': ['Job abilities', 'Weapon skills', 'Fighting (damage)', 'Pets', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Dragoon Guide'},
+    'DNC': {'title': 'Dancer: damage, healing, debuffs',
+          'text': 'A Dancer deals damage (wsdist), heals with Waltzes (potency to 50 %, then CHR and VIT), and debuffs with Steps and Flourishes: Violent Flourish needs magic accuracy, Reverse Flourish Maculele Bangles and Toetapper Mantle, Climactic Flourish the Maculele Tiara. Step accuracy gear is rarely needed (Presto gives +50). Horos pieces boost Trance, No Foot Rise, Saber Dance, Fan Dance.',
+          'order': ['Job abilities', 'Cures', 'Weapon skills', 'Fighting (damage)', 'Staying alive', 'Casting fast', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Dancer Guide'},
+    'BST': {'title': 'Beastmaster: you and your pet',
+          'text': "A Beastmaster's pet does much of the work: Ready recast, pet attack / accuracy / magic for Ready moves, pet damage taken (it stops at 87.5 %), Reward by MND and Reward+ gear, pet level + pieces. Your own weapon skills and TP sets are judged by wsdist.",
+          'order': ['Pets', 'Job abilities', 'Weapon skills', 'Fighting (damage)', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Beastmaster Guide (its gear section is empty)'},
+    'SMN': {'title': 'Summoner: Blood Pacts',
+          'text': "A Summoner's damage and support come from Blood Pacts: Blood Pact delay to its caps (15 from delay I gear, 15 from delay II), then pet attack / magic for the pact, Summoning skill for wards, and Refresh with less avatar perpetuation cost while standing.",
+          'order': ['Pets', 'Casting fast', 'Staying alive', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': "BG Wiki's community guide for this job is an empty page, so this uses the item text and the general rules"},
+    'PUP': {'title': 'Puppetmaster: you and your automaton',
+          'text': "A Puppetmaster's automaton tanks, heals or deals damage by its frame and attachments (which the Doctor can't see). Pet sets are judged as whole sets (pet damage taken stops at 87.5 %, pet haste); your own sets by wsdist. Kenkonken with Aftermath cuts overloads.",
+          'order': ['Pets', 'Weapon skills', 'Fighting (damage)', 'Job abilities', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Puppetmaster Guide'},
+    'RNG': {'title': 'Ranger: shooting',
+          'text': 'A Ranger shoots: Snapshot first to 70 % (60 % from gear with merits; Flurry II adds 30 %), then Rapid Shot; then ranged accuracy to the cap on your monster, Store TP, critical hits. Ability pieces for Double Shot, Barrage, Camouflage, Scavenge, Bounty Shot. Weapon skills are judged by wsdist.',
+          'order': ['Shooting', 'Job abilities', 'Weapon skills', 'Fighting (damage)', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': "BG Wiki's community guide for this job is an empty page, so this uses the item text and the general rules"},
+    'BLM': {'title': 'Black Mage: nukes and magic bursts',
+          'text': "A Black Mage nukes (wsdist): Magic Atk. Bonus, magic damage, INT; magic burst bonus from gear stops at 40 % (Magic Burst Bonus II does not). Its other sets: Mana Wall (Wicce Sabots, Archmage's Staff, Taranus's Cape: up to 95 %), Death (max MP), Drain / Aspir (Spaekona's Tonban), Stun and Sleepga (magic accuracy), Fast Cast to 80 % with Elemental casting time.",
+          'order': ['Nukes and blue magic damage', 'Casting fast', 'Dark magic', 'Enfeebling', 'Staying alive', 'Job abilities', 'Cures', 'Enhancing', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Black Mage Guide'},
+})
+
 # the guide's words for each kind of set, per job ((job, purpose) -> text); shown under "What it is for"
 WHY = {
     ('RDM', 'Enfeebling (MND)'): ("Potency spells (Slow II, Paralyze II, Addle II, Frazzle II): MND against the target's (Frazzle II: dMND to 50, skill to 350), "
@@ -106,6 +178,30 @@ WHY = {
     ('DRK', 'Ability'): ("The piece that boosts it (from the item text): Fall. Sollerets (Last Resort), Ignominy Burgeonet (Souleater), Ignominy "
                          "Gauntlets (Weapon Bash), Ignominy Sollerets (Arcane Circle), Heath. Flanchard (Nether Void)."),
 }
+WHY.update({
+    ('WHM', 'Cure'): "Cure potency to 50 %, then Cure potency II; Ebers Pantaloons in every cure set (up to 8 % of the MP back); Afflatus Solace gear (Ebers Bliaut) for single cures.",
+    ('WHM', 'Curaga'): 'Curaga: potency and MND, without the Afflatus Solace pieces (Theophany Bliaut, Twilight Cape).',
+    ('WHM', 'Cursna'): "Cursna: Healing magic skill and Cursna+ gear (Theophany Pantaloons) raise the chance it removes Doom.",
+    ('WHM', 'Regen'): 'Regen: Piety Bliaut for potency (+52 %), Ebers Mitts for duration.',
+    ('WHM', 'Barspells'): 'Barspells stop at 500 Enhancing skill; Piety Pantaloons and the Ebers set make them stronger.',
+    ('WHM', 'Fast cast'): 'Fast Cast to 80 %; for cures the merits give 20 % and "Cure spellcasting time" gear counts too.',
+    ('SCH', 'Regen'): 'Regen V is a Scholar\'s best heal: Arbatel Bonnet for potency, Arbatel Bracers with Perpetuance for duration, Musa +25 potency.',
+    ('SCH', 'Fast cast'): 'Fast Cast to 80 %; "Grimoire: spellcasting time" pieces (Pedagogy Mortarboard, Academic\'s Loafers) count on top in the right Arts.',
+    ('RUN', 'Phalanx'): 'Phalanx: Enhancing skill steps (500 = 35) plus Phalanx+ gear, as for a Paladin.',
+    ('RUN', 'Enmity'): 'Flash, Foil and rune abilities: enmity, with damage taken kept.',
+    ('THF', 'Treasure Hunter'): 'Treasure Hunter +8 with the trait is all that counts when you tag (gear above that is wasted); it grows by itself in the fight.',
+    ('THF', 'Sneak Attack'): 'Sneak Attack: DEX (Skulker\'s Armlets add to it).',
+    ('THF', 'Trick Attack'): 'Trick Attack: AGI (Pillager\'s Armlets add to it).',
+    ('DNC', 'Waltz'): 'Waltz potency to 50 % (Horos Tiara, Maxixi Casaque, Dashing Subligar, Etoile Gorget), then CHR and VIT.',
+    ('DNC', 'Steps'): 'Steps land on accuracy; Step accuracy gear is rarely needed, Presto gives +50.',
+    ('DNC', 'Violent Flourish'): 'Violent Flourish is a stun that lands on magic accuracy: Maculele pieces, Horos Casaque.',
+    ('BLM', 'Drain and Aspir'): '"Drain" and "Aspir" potency (Spaekona\'s Tonban) and Dark magic skill.',
+    ('RNG', 'Snapshot'): 'Snapshot first, to 70 % (60 % from gear with merits; Flurry II adds 30 %), then Rapid Shot.',
+    ('BRD', 'Songs: buff'): '"All Songs +" and the song\'s own piece make it stronger; song duration pieces make it last. The instrument stays.',
+    ('BRD', 'Songs: dummy'): 'A dummy song is sung to be replaced: kept weak and short on purpose.',
+    ('BRD', 'Songs: enfeeble'): 'Lullaby and the other debuffs: magic accuracy, Singing and instrument skill, CHR.',
+    ('SMN', 'Blood Pact delay'): 'Blood Pact delay: 15 from "delay" gear and 15 from "delay II" gear are the caps.',
+})
 
 
 def why(job, focus):
@@ -119,6 +215,8 @@ GROUPS = {
     'blue magic': 'Blue magic (buffs, cures, accuracy)',
     'phantom roll': 'Rolls and Quick Draw', 'quick draw': 'Rolls and Quick Draw',
     'snapshot': 'Shooting', 'ranged shots': 'Shooting',
+    'songs': 'Songs', 'geocolure': 'Geomancy', 'indicolure': 'Geomancy', 'blood pact': 'Pets', 'ready': 'Pets',
+    'utsusemi': 'Ninjutsu', 'ninjutsu': 'Ninjutsu',
 }
 
 
@@ -290,6 +388,24 @@ def file_checks(rows, ctx, loaded=None):
                         f"Rapid Shot {n.get('rapid', 0)} %."))
         if 'Luzaf\'s Ring' in owned and not any('luzaf' in r['path'].lower() for r in rows):
             out.append(('warn', "You have Luzaf's Ring but no set for it: it doubles your rolls' range (8 to 16 yalms)."))
+    if job not in ('BLU', 'DRK'):
+        for r in by_focus.get('Ability', []):
+            if r['r']['n_now'].get('ja', 0) == 0 and r['r']['n_best'].get('ja', 0) > 0:
+                out.append(('warn', f"{r['path'][5:]}: none of its gear boosts {r['r']['n_now'].get('ability') or 'the ability'}, and you own a piece that does."))
+    if job in ('THF',):
+        for r in by_focus.get('Treasure Hunter', [])[:1]:
+            n = r['r']['n_now']
+            out.append(('ok' if n.get('th', 0) >= n.get('th_cap', 4) else 'warn',
+                        f"{r['path'][5:]}: Treasure Hunter +{n.get('th', 0)} from gear; +{n.get('th_cap', 4)} is all that counts with the trait (+8 in all)."))
+    if job in ('RNG',):
+        for r in by_focus.get('Snapshot', [])[:1]:
+            n = r['r']['n_now']
+            out.append(('ok' if n.get('snap', 0) >= 60 else 'warn',
+                        f"{r['path'][5:]}: Snapshot {n.get('snap', 0)} % from gear (60 % with merits makes 70 %, Flurry II adds 30 %), Rapid Shot {n.get('rapid', 0)} %."))
+    if job in ('WHM', 'SCH', 'DNC'):
+        for g in ('Cure', 'Waltz'):
+            for r in by_focus.get(g, [])[:1]:
+                out.append(('ok', f"{r['path'][5:]}: {gear_words(r)}"))
     if job == 'BLU':
         for r in by_focus.get('Blue magic: skill', [])[:1]:
             n = r['r']['n_best']
@@ -309,6 +425,13 @@ def file_checks(rows, ctx, loaded=None):
             if r['r']['n_now'].get('ja', 0) == 0 and r['r']['n_best'].get('ja', 0) > 0:
                 out.append(('warn', f"{r['path'][5:]}: none of its gear boosts {r['r']['n_now'].get('ability') or 'the ability'}, and you own a piece that does."))
     return out
+
+
+def gear_words(r):
+    """The first number of a judged set, in its own words (cures and Waltzes say HP healed and the potency cap)."""
+    import gear_opt
+    w = gear_opt.words(r, r['r'], 'now')
+    return w if len(w) <= 150 else w[:148] + '...'
 
 
 def rename_text(fixes):
