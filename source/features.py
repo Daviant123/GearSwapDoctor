@@ -238,6 +238,24 @@ FEATURES = [
               ('geo', 'int', 'Indi / Geo-Haste counts as (%)', 40, {'lo': 3, 'hi': 41, 'step': 1}),
               ('blu_dw', 'int', 'A BLU\'s Dual Wield from its spells (%)', 25, {'lo': 0, 'hi': 35, 'step': 5})],
      'jobs': MELEE, 'already': r'delay.?cap|haste.*level'},
+    # (his request 2026-11-13: "a feature that shows the double attack and current accuracy, including buffs")
+    {'key': 'acc', 'title': 'Accuracy and Double Attack now (gear + buffs)', 'group': 'Fighting',
+     'what': 'Shows your accuracy and Double Attack as they are right now, with your gear and buffs, in the small window (and a chat line when '
+             'they change): //gs c gsd acc says what each comes from. The game doesn\'t send your accuracy, so it is worked out with BG Wiki\'s '
+             'formula: weapon skill + DEX x 0.75 + Accuracy+ gear + traits + buffs (Madrigal, Hunter\'s Roll, Aggressor, Hasso, food). DEX comes from '
+             'the game\'s own stats, with gear and buffs. Double Attack: gear + the Warrior trait + Fighter\'s Roll / Temper. A roll or Madrigal it '
+             'sees land uses its real number; one it doesn\'t see counts as set here. Job points and merits aren\'t known: add yours below.',
+     'opts': [('tell', 'choice', 'Tell me in the chat', 'When it changes', {'values': ['When it changes', 'Never']}),
+              ('idle', 'bool', 'Also when not fighting', False, {}),
+              ('roll', 'choice', 'A roll it did not see land counts as', 'Lucky number', {'values': ['Lucky number', '11', '10', '9', '7', '5', '3']}),
+              ('roll_plus', 'int', "Your Corsair's Phantom Roll + gear", 7, {'lo': 0, 'hi': 8, 'step': 1}),
+              ('song', 'int', "Your singer's Madrigal / Songs+ gear", 4, {'lo': 0, 'hi': 9, 'step': 1}),
+              ('food', 'int', 'Your food gives accuracy', 0, {'lo': 0, 'hi': 100, 'step': 5}),
+              ('geo', 'int', 'Indi / Geo-Precision counts as', 0, {'lo': 0, 'hi': 150, 'step': 5}),
+              ('temper', 'int', 'Temper counts as (Double Attack %)', 10, {'lo': 0, 'hi': 30, 'step': 1}),
+              ('extra', 'int', 'Accuracy your job points / merits add', 0, {'lo': 0, 'hi': 100, 'step': 1}),
+              ('da_extra', 'int', 'Double Attack your job points / merits add (%)', 0, {'lo': 0, 'hi': 30, 'step': 1})],
+     'jobs': MELEE, 'already': r'Double Attack.*accuracy|acc_display|show_acc'},
     {'key': 'aftermath', 'title': 'Aftermath gear (AM1 / AM2 / AM3)', 'group': 'Fighting',
      'what': 'While you fight with Aftermath up, gear for that level goes on, and your normal set comes back when it wears off. It uses what you pick '
              'for that level; otherwise it looks for sets named for it: sets.engaged.Liberator.AM3, sets.engaged.Liberator.AM, sets.engaged.AM3, '
@@ -806,7 +824,7 @@ def simulate_src(src, name, engine):
     run('buff_change', 'Doom', False)
     run('buff_change', 'Aftermath: Lv.3', True)
     run('buff_change', 'Aftermath: Lv.3', False)
-    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste'):
+    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste', 'gsd acc'):
         run('self_command', c)
     ok, e = L.globals().SIM_TICK(S)
     if not ok and 'gsd-features' in str(e):
@@ -827,7 +845,7 @@ NEEDS = {'doom': ('gear',), 'sleep': ('gear',), 'kiting': ('gear', 'set'), 'refr
 COMMANDS = {'dt': ['//gs c gsd dt'], 'th': ['//gs c gsd th', '//gs c gsd th off / tag / always'],
             'weapons': ['//gs c gsd weapons'], 'reraise': ['//gs c gsd reraise'],
             'rings': ['//gs c gsd warp', '//gs c gsd dim', '//gs c gsd xp', '//gs c gsd cp', '//gs c gsd unlock'],
-            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste']}
+            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste'], 'acc': ['//gs c gsd acc']}
 
 
 def missing(conf):

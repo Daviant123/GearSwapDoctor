@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 5.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 6.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 5, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 6, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -289,6 +289,7 @@ function G.box_update()
     if on('kiting') and G.moving then parts[#parts + 1] = 'moving' end
     if on('lowhp') and G.low_hp then parts[#parts + 1] = 'LOW HP' end
     if on('haste') and G.haste_short then parts[#parts + 1] = G.haste_short end
+    if on('acc') and G.acc_short then parts[#parts + 1] = G.acc_short end
     if G.box.text then G.box:text('GSD  ' .. table.concat(parts, '  |  ')) end
     if G.box.show and not G.hidden then G.box:show() end
 end
@@ -304,6 +305,7 @@ local HELP = {
     'reraise - reraise gear on / off', 'warp / dim / xp / cp - put on that ring, lock it, use it',
     'unlock - free the ring slots', 'box - show / hide the window', 'refresh - put your gear back on',
     'haste - how much haste you have and what is still missing',
+    'acc - your accuracy and Double Attack now, and what they come from',
 }
 function G.command(w)
     local c = low(w[2])
@@ -338,6 +340,9 @@ function G.command(w)
     elseif c == 'haste' then
         local h = G.haste_now()
         if h then say(G.haste_words(h)) else say('haste: nothing to read yet') end
+    elseif c == 'acc' then
+        local ok, a = pcall(G.acc_now)
+        if ok and a then say(G.acc_words(a)) else say('accuracy: nothing to read yet') end
     else
         say('commands (//gs c gsd ...):')
         for _, h in ipairs(HELP) do add_to_chat(207, '   ' .. h) end
@@ -626,6 +631,224 @@ end
 -- Only reads what the game shows you; nothing is sent. data\gsd_fights_<Name>.csv: see real_fights.py.
 local FIGHT_HIT, FIGHT_CRIT, FIGHT_MISS = { [1] = true, [67] = true }, { [67] = true }, { [15] = true, [63] = true }
 local WS_HIT, WS_MISS = { [185] = true, [187] = true }, { [188] = true }     -- (res action_messages.lua: damage, HP drained; a miss)
+-- ------------------------------------------------------------------ Accuracy and Double Attack (his request 2026-11-13: "a feature that shows the double
+-- attack and current accuracy, including buffs"). The game doesn't send your accuracy, so it is worked out with BG Wiki's formula:
+--   accuracy = weapon skill (up to 200 as is, then 0.9 / 0.8 / 0.9 a point) + floor(DEX x 0.75) + Accuracy+ gear + traits + buffs
+-- DEX (with gear and buffs) comes from the game's own character stats (it sends them whenever gear or buffs change). Double Attack: gear + the
+-- Warrior trait + Fighter's Roll / Temper. Rolls and Madrigals it sees land use their real number; the others count as set in GearSwap Doctor.
+local ACC_TRAIT = { RNG = { { 10, 10 }, { 30, 22 }, { 50, 35 }, { 70, 48 }, { 86, 60 }, { 96, 73 } },
+                    DRG = { { 30, 10 }, { 60, 22 }, { 76, 35 } }, DNC = { { 30, 10 }, { 60, 22 }, { 76, 35 } },
+                    RUN = { { 50, 10 }, { 70, 22 }, { 90, 35 } } }                          -- (BG Wiki Accuracy Bonus)
+local DA_TRAIT = { WAR = { { 25, 10 }, { 50, 12 }, { 75, 14 }, { 85, 16 }, { 99, 18 } } }  -- (BG Wiki Double Attack; job points add more)
+local HUNTER = { 10, 13, 15, 40, 18, 20, 25, 5, 28, 30, 50 }                            -- (BG Wiki Hunter's Roll; +5 a Phantom Roll +1)
+local FIGHTER = { 1, 2, 3, 4, 10, 5, 6, 6, 1, 7, 15 }                                   -- (BG Wiki Fighter's Roll; +1 a Phantom Roll +1)
+local ROLL_IDS = { [98] = 'fighter', [108] = 'hunter' }
+local LUCKY = { fighter = 5, hunter = 4 }
+local MADRIGAL = { [399] = { 45, 4.5 }, [400] = { 60, 6 } }                             -- (Sword / Blade Madrigal: base, a Songs+ point)
+local acc_cache = {}
+
+local function trait(t, lv)
+    local v = 0
+    for _, x in ipairs(t or {}) do if (lv or 0) >= x[1] then v = x[2] end end
+    return v
+end
+
+local function skill_acc(s)
+    if s <= 200 then return s end
+    if s <= 400 then return math.floor((s - 200) * 0.9) + 200 end
+    if s <= 600 then return math.floor((s - 400) * 0.8) + 380 end
+    return math.floor((s - 600) * 0.9) + 540
+end
+
+-- Accuracy+, Double Attack and "<weapon> skill +" of one item: its own text (not Set: / Latent effect: ...), and its augments
+local function acc_item(it, skill_name)
+    local key = tostring(it.id) .. '/' .. tostring(it.extdata) .. '/' .. tostring(skill_name)
+    if acc_cache[key] then return acc_cache[key] end
+    local out = { acc = 0, da = 0, skill = 0 }
+    local res = gearswap and gearswap.res
+    local d = res and res.item_descriptions and res.item_descriptions[it.id]
+    local text = d and d.en or ''
+    local from = 1
+    while true do
+        local a, b, word = text:find('(%a+):', from)
+        if not a then break end
+        if word ~= 'DEF' and word ~= 'DMG' and word ~= 'Delay' then text = text:sub(1, a - 1) break end
+        from = b + 1
+    end
+    local function read(s)
+        for pos, n in s:gmatch('()Accuracy%+(%d+)') do
+            local before = s:sub(math.max(1, pos - 7), pos - 1)
+            if not before:find('Magic') and not before:find('Ranged') then out.acc = out.acc + tonumber(n) end
+        end
+        for pos, n in s:gmatch('()Acc%.%+(%d+)') do
+            local before = s:sub(math.max(1, pos - 5), pos - 1)
+            if not before:find('Mag') and not before:find('Rng') then out.acc = out.acc + tonumber(n) end
+        end
+        out.da = out.da + (tonumber(s:match('Double Attack"?%+(%d+)')) or 0) + (tonumber(s:match('Dbl%.Atk%."?%+(%d+)')) or 0)
+        if skill_name then out.skill = out.skill + (tonumber(s:match(skill_name .. ' skill %+(%d+)')) or 0) end
+    end
+    read(text)
+    local ok, dec = pcall(function() return gearswap.extdata.decode(it) end)
+    for _, aug in ipairs(ok and type(dec) == 'table' and dec.augments or {}) do
+        if type(aug) == 'string' and not aug:find(':') then read(aug) end
+    end
+    acc_cache[key] = out
+    return out
+end
+
+local function roll_value(kind)
+    local c = cfg.acc or {}
+    local n = (G.rolls or {})[kind]
+    if not n then
+        n = c.roll == '11' and 11 or tonumber(c.roll) or LUCKY[kind]
+    end
+    n = math.max(1, math.min(11, n))
+    local t = kind == 'hunter' and HUNTER or FIGHTER
+    return t[n] + (c.roll_plus or 0) * (kind == 'hunter' and 5 or 1), n
+end
+
+-- {acc, da, att, parts, da_parts, exact} or nil when the game has nothing to read yet
+function G.acc_now()
+    local p = windower.ffxi.get_player()
+    if not p or type(p.buffs) ~= 'table' then return nil end
+    local res = gearswap and gearswap.res
+    local c = cfg.acc or {}
+    local eq = windower.ffxi.get_items and windower.ffxi.get_items('equipment')
+    local skill_id, two_handed
+    if type(eq) == 'table' and eq.main and eq.main ~= 0 then
+        local it = windower.ffxi.get_items(eq.main_bag, eq.main)
+        local info = type(it) == 'table' and res and res.items and res.items[it.id]
+        if info then skill_id, two_handed = info.skill, TWO_HANDED_SKILL[info.skill or 0] end
+    end
+    local skill_name = skill_id and res and res.skills and res.skills[skill_id] and res.skills[skill_id].en or (skill_id == nil and 'Hand-to-Hand' or nil)
+    local gear_acc, gear_da, gear_skill = 0, 0, 0
+    if type(eq) == 'table' then
+        for _, slot in ipairs(WORN) do
+            local idx = eq[slot]
+            if idx and idx ~= 0 then
+                local it = windower.ffxi.get_items(eq[slot .. '_bag'], idx)
+                if type(it) == 'table' and it.id and it.id ~= 0 then
+                    local st = acc_item(it, skill_name)
+                    gear_acc, gear_da, gear_skill = gear_acc + st.acc, gear_da + st.da, gear_skill + st.skill
+                end
+            end
+        end
+    end
+    local base_skill
+    if skill_name and type(p.skills) == 'table' then
+        base_skill = p.skills[(skill_name:lower():gsub("[%s%-]", "_"))]
+    end
+    local skill = (base_skill or 0) + gear_skill
+    local main_job, sub_job = p.main_job or (player and player.main_job), p.sub_job or (player and player.sub_job)
+    local main_lv, sub_lv = p.main_job_level or 99, p.sub_job_level or 49
+    local traits = math.max(trait(ACC_TRAIT[main_job], main_lv), trait(ACC_TRAIT[sub_job], sub_lv))
+    local buffs, da_buffs, names, da_names, madrigals = 0, 0, {}, {}, 0
+    local seen_m = G.madrigals_seen or {}
+    for _, id in ipairs(p.buffs) do
+        if id == 199 then
+            madrigals = madrigals + 1
+            local m = MADRIGAL[seen_m[#seen_m - madrigals + 1] or 400]
+            local v = math.floor(m[1] + m[2] * (c.song or 4))
+            buffs = buffs + v
+            names[#names + 1] = 'Madrigal ' .. v
+        elseif id == 320 then
+            local v, n = roll_value('hunter')
+            buffs = buffs + v
+            names[#names + 1] = ("Hunter's Roll %d (%d)"):format(n, v)
+        elseif id == 58 then buffs = buffs + 25 names[#names + 1] = 'Aggressor 25'
+        elseif id == 353 and two_handed then buffs = buffs + 10 names[#names + 1] = 'Hasso 10'
+        elseif id == 251 and (c.food or 0) > 0 then buffs = buffs + c.food names[#names + 1] = 'food ' .. c.food
+        elseif (id == 90 or id == 553) and (c.geo or 0) > 0 then buffs = buffs + c.geo names[#names + 1] = 'Accuracy Boost ' .. c.geo
+        elseif id == 310 then
+            local v, n = roll_value('fighter')
+            da_buffs = da_buffs + v
+            da_names[#da_names + 1] = ("Fighter's Roll %d (%d%%)"):format(n, v)
+        elseif id == 432 and (c.temper or 0) > 0 then da_buffs = da_buffs + c.temper da_names[#da_names + 1] = 'Temper ' .. c.temper .. '%'
+        end
+    end
+    local extra = c.extra or 0
+    local dex = G.dex
+    if not dex then                                  -- (GearSwap reads the same stats when you log in: player.dex, until the game sends new ones)
+        local ok, v = pcall(function() return player and tonumber(player.dex) end)
+        if ok and v and v > 0 then dex = v end
+    end
+    local acc = skill_acc(skill) + (dex and math.floor(dex * 0.75) or 0) + gear_acc + traits + buffs + extra
+    local da_trait = math.max(trait(DA_TRAIT[main_job], main_lv), trait(DA_TRAIT[sub_job], sub_lv))
+    local da = gear_da + da_trait + da_buffs + (c.da_extra or 0)
+    local parts = ('%s skill %d (%d from gear) = %d, DEX %s = %s, gear +%d, traits +%d, buffs +%d%s%s'):format(
+        skill_name or 'weapon', skill, gear_skill, skill_acc(skill), dex and tostring(dex) or '?', dex and tostring(math.floor(dex * 0.75)) or '?',
+        gear_acc, traits, buffs, #names > 0 and (' (' .. table.concat(names, ', ') .. ')') or '', extra ~= 0 and (', your own +' .. extra) or '')
+    local da_parts = ('gear %d%%, traits %d%%, buffs %d%%%s'):format(gear_da, da_trait, da_buffs,
+        #da_names > 0 and (' (' .. table.concat(da_names, ', ') .. ')') or '')
+    return { acc = acc, da = da, att = G.att, parts = parts, da_parts = da_parts, exact = dex ~= nil and base_skill ~= nil }
+end
+
+function G.acc_words(a)
+    local s = ('Accuracy %s%d (%s). Double Attack %d%% (%s).'):format(a.exact and '' or 'about ', a.acc, a.parts, a.da, a.da_parts)
+    if a.att then s = s .. (' Attack %d (the game\'s own number).'):format(a.att) end
+    if not a.exact then s = s .. ' (DEX not read yet: it comes with your next gear change.)' end
+    return s
+end
+
+-- Every 2 s while fighting and not in an action: the window line, and a chat line when it changes and stays changed
+function G.acc_tick(status)
+    if not on('acc') or (midaction and midaction()) then return end
+    if status ~= 1 and not cfg.acc.idle then return end
+    local now = os.clock()
+    if now < (G.acc_next or 0) then return end
+    G.acc_next = now + 2
+    local ok, a = pcall(G.acc_now)
+    if not ok or not a then return end
+    G.acc_short = ('Acc %s%d  DA %d%%'):format(a.exact and '' or '~', a.acc, a.da)
+    local key = math.floor(a.acc / 10) .. '|' .. a.da
+    if key ~= G.acc_told then
+        if key ~= G.acc_maybe then G.acc_maybe = key
+        else
+            G.acc_told = key
+            if (cfg.acc.tell or 'When it changes') ~= 'Never' then add_to_chat(207, 'GearSwap Doctor: ' .. G.acc_words(a)) end
+        end
+    end
+    G.box_update()
+end
+
+-- The game's own character stats: DEX (with gear and buffs) and Attack
+local function acc_chunk(id, data)
+    if id ~= 0x061 or not on('acc') then return end
+    pcall(function()
+        G.dex = data:unpack('H', 0x17) + data:unpack('h', 0x25)
+        G.att = data:unpack('H', 0x31)
+    end)
+end
+
+-- A roll or a Madrigal landing on you says how strong it is (Double-Up: the roll its Corsair last rolled)
+local function acc_action(act)
+    if not on('acc') or not act then return end
+    local id = me_id()
+    if act.category == 6 and (ROLL_IDS[act.param] or act.param == 123) then
+        G.roll_by = G.roll_by or {}
+        local kind = ROLL_IDS[act.param] or G.roll_by[act.actor_id]
+        if ROLL_IDS[act.param] then G.roll_by[act.actor_id] = ROLL_IDS[act.param] end
+        if not kind then return end
+        for _, t in ipairs(act.targets or {}) do
+            local a = t.actions and t.actions[1]
+            if t.id == id and a and a.param and a.param >= 1 and a.param <= 12 then
+                G.rolls = G.rolls or {}
+                G.rolls[kind] = a.param <= 11 and a.param or nil
+            end
+        end
+    elseif act.category == 4 and MADRIGAL[act.param] then
+        for _, t in ipairs(act.targets or {}) do
+            if t.id == id then
+                local seen = G.madrigals_seen or {}
+                seen[#seen + 1] = act.param
+                if #seen > 2 then table.remove(seen, 1) end
+                G.madrigals_seen = seen
+                return
+            end
+        end
+    end
+end
+
 local function fight_am()
     return G.am_level and (G.am_level() or -1) or -1
 end
@@ -895,6 +1118,7 @@ local function tick()
         send_command('gs c gsd refresh')
     end
     G.haste_tick(status)
+    G.acc_tick(status)
     G.tools_tick()
     if on('fights') and now - (G.fights_t or 0) > 60 then
         G.fights_t = now
@@ -960,7 +1184,7 @@ function G.install()
         pcall(G.fights_flush)
         if G.box and G.box.destroy then G.box:destroy() end
     end)
-    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') or on('tools') then
+    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') or on('tools') or on('acc') then
         windower.raw_register_event('prerender', tick)
     end
     if on('tools') then windower.raw_register_event('outgoing text', function(o) pcall(tools_text, o) end) end
@@ -969,6 +1193,10 @@ function G.install()
         windower.raw_register_event('action', function(act) pcall(on_fight, act) end)
     end
     if on('haste') then windower.raw_register_event('action', on_spell) end
+    if on('acc') then
+        windower.raw_register_event('action', function(act) pcall(acc_action, act) end)
+        windower.raw_register_event('incoming chunk', acc_chunk)
+    end
     if on('th') then windower.raw_register_event('action', on_action) end
     if on('th') or on('rings') then
         windower.raw_register_event('zone change', function()
