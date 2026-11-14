@@ -932,10 +932,9 @@ def _locked(cur, data):
     out = set()
     for slot, c in cur.items():
         text = data.text.get(c['id'], '') if data else ''
-        if 'Able to cast' in text or 'Enables' in text or 'Cannot Equip Headgear' in text:
+        if 'Able to cast' in text or 'Enables' in text or c.get('blocks'):
             out.add(slot)
-            if 'Cannot Equip Headgear' in text:
-                out.add('head')
+            out |= set(c.get('blocks') or ())
     return out
 
 
@@ -1105,6 +1104,8 @@ def upgrade_ideas(best, spec, every, counts, only=None, keep_weapons=True, n=3, 
                 continue
             if s in ('main', 'sub'):
                 continue                                    # (weapons: two-handed / shield rules - left to the set builder)
+            if healing.clash(best, s, c):                 # (a cloak with a helm on, a helm under a cloak: can't be worn together)
+                continue
             g = dict(best)
             g[s] = c
             d = main_value(g, spec) - v0

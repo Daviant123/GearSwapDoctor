@@ -217,6 +217,7 @@ def candidate(it, data, augments=None):
     # (a JSE earring whose stats are all "Right ear:": nothing in the left ear, so it only goes in the right)
     side = 'ear2' if text.startswith('Right ear:') else 'ear1' if text.startswith('Left ear:') else None
     return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'], 'side': side, 'quoted': quoted,
+            'blocks': blocked_slots(text),
             'set': hidden.family(text, it['en']),
             'skill': info.get('skill'), 'shield': info.get('shield', False),
             'two_handed': info.get('skill') in TWO_HANDED and bool(it['slots'] & 1)}
@@ -477,9 +478,48 @@ def score(kind, gear, base, spell, need, solace=False):
     return s - 1000 * shortfall(t, need)
 
 
+BLOCK_RX = re.compile(r'cannot equip (headgear|handgear|leggear|footgear|hand or footgear|hand)', re.I)
+BLOCK_SLOTS = {'headgear': ('head',), 'handgear': ('hands',), 'hand': ('hands',), 'leggear': ('legs',), 'footgear': ('feet',), 'hand or footgear': ('hands', 'feet')}
+
+
+def blocked_slots(text):
+    """The slots a piece leaves no room for (his report 2026-11-14: "crepuscular cloak and sakpata's helm can't be equipped at the same time"): a
+    cloak's text says "Cannot equip headgear", some suits hand / leg / foot gear."""
+    out = set()
+    for m in BLOCK_RX.findall(text or ''):
+        out |= set(BLOCK_SLOTS[m.lower()])
+    return tuple(sorted(out))
+
+
+def clash(gear, slot, c):
+    """The piece that can't be worn together with c in this slot, or None: c covers a slot that is filled, or a worn piece covers c's slot."""
+    if c is None:
+        return None
+    for b in c.get('blocks') or ():
+        if b != slot and gear.get(b):
+            return gear[b]
+    for s, x in gear.items():
+        if x and s != slot and slot in (x.get('blocks') or ()):
+            return x
+    return None
+
+
+def uncovered(gear):
+    """The set without the pieces another piece leaves no room for (the head under a cloak)."""
+    covered = {b for c in gear.values() if c for b in (c.get('blocks') or ())}
+    return {s: c for s, c in gear.items() if not (c and s in covered)}
+
+
+def covered_pairs(gear):
+    """[(the piece that covers, the slot, the piece that can't be worn)] in a set."""
+    return [(c['name'], b, gear[b]['name']) for c in gear.values() if c for b in (c.get('blocks') or ()) if gear.get(b)]
+
+
 def _allowed(gear, slot, c, counts, job, sub):
     """May this item go in this slot, with the rest of the set as it is?"""
     if c is not None and not fits(c, slot):
+        return False
+    if clash(gear, slot, c):
         return False
     if c is not None:
         used = sum(1 for s, x in gear.items() if s != slot and x and x['name'] == c['name'])
@@ -526,6 +566,9 @@ def build(kind, cands, current, base, job, sub, spell=None, need=None, keep_weap
         fixed.update({s: current.get(s) for s in SLOTS if s not in slots and current.get(s)})
     if no_ammo:
         fixed['ammo'] = current.get('ammo')
+    # (a set that has a cloak and a helm: in game the cloak wins and the helm stays off, so the search starts without the covered piece)
+    current = uncovered(current)
+    fixed = uncovered(fixed)
     best_set, best_s = None, None
     starts = [dict(current), dict(fixed)]
     if need:                                                # (also from the gear with the most of what the set must have)

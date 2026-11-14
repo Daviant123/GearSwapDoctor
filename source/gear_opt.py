@@ -411,6 +411,8 @@ def ideas(row, r, ctx, every, n=3):
         for c in pool:
             if not healing.fits(c, s):
                 continue
+            if healing.clash(r['best'], s, c):
+                continue
             g = dict(r['best'])
             g[s] = c
             d = pld.value(g, spec) - v0
@@ -427,6 +429,16 @@ def file_checks(rows, ctx):
     fixes = job_guides.name_fixes(ctx.loaded) if ctx.loaded is not None else []
     if fixes:
         out.append(('bad', job_guides.rename_text(fixes)))
+    both = []                                   # (a cloak and a helm in one set: only one can be worn)
+    for s in (ctx.loaded.sets if ctx.loaded is not None else []):
+        try:
+            for a, slot, b in healing.covered_pairs(healing.set_to_gear(s['gear'], ctx.items, ctx.data)):
+                both.append(f"{s['path'][5:]} ({a} + {b})")
+        except Exception:
+            pass
+    if both:
+        out.append(('bad', f"{len(both)} set(s) name two pieces that can't be worn together, so one stays off: {', '.join(both[:4])}"
+                           f"{' ...' if len(both) > 4 else ''}. Take the head piece out of a cloak set (head = empty)."))
     if ctx.job != 'PLD':
         judged = [r for r in rows if r.get('r') and r['judge'] in ('job', 'idle')]
         if not judged:
