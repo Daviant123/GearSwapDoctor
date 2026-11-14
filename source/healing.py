@@ -225,11 +225,12 @@ def known_augments(loaded_list):
     return out
 
 
-def candidates(owned_items, data, augs=None):
-    """Every owned item, once per augmented copy known from his files."""
+def candidates(owned_items, data, augs=None, real=None):
+    """Every owned item, once per augmented copy. real: {item id: [augment lists]} read from his bags (checks.load_augments): the gear as it
+    really is; an item not in it uses what his files name (augs), as before."""
     out = []
     for it in owned_items:
-        variants = (augs or {}).get(it['en'].lower()) or (augs or {}).get(it['enl'].lower()) or [None]
+        variants = (real or {}).get(it['id']) or (augs or {}).get(it['en'].lower()) or (augs or {}).get(it['enl'].lower()) or [None]
         for a in variants:
             out.append(candidate(it, data, a))
     return out

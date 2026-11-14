@@ -615,8 +615,8 @@ def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=
     return out
 
 
-def _owned_cands(loaded, job, bags, items):
-    """(candidates, counts) of what's in the inventory and wardrobes, for the item-text judges."""
+def _owned_cands(loaded, job, bags, items, real=None):
+    """(candidates, counts) of what's in the inventory and wardrobes, for the item-text judges. real: checks.load_augments(character)."""
     global _IDLE_DATA
     import healing
     if _IDLE_DATA is None:
@@ -630,7 +630,7 @@ def _owned_cands(loaded, job, bags, items):
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
-    return healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded])), counts
+    return healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real), counts
 
 
 def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=None, ideas=True, progress=None):

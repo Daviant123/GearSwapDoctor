@@ -57,7 +57,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.25.0'
+VERSION = '2.26.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2140,7 +2140,7 @@ class App(tk.Tk):
         key = (self._opt_path, self.who.get(), self._opt_signature()[3]) if hasattr(self, 'opt_main') else None
         if getattr(self, '_opt_owned_key', None) != key or not hasattr(self, '_opt_owned_v'):
             bags = checks.load_bags(self.who.get()) or {}
-            self._opt_owned_v = doctor._owned_cands(self._opt_ld, self._opt_job(), bags, self.items)
+            self._opt_owned_v = doctor._owned_cands(self._opt_ld, self._opt_job(), bags, self.items, checks.load_augments(self.who.get()))
             self._opt_owned_key = key
         return self._opt_owned_v
 

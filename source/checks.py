@@ -127,6 +127,32 @@ def load_bags(character, steward_chars=None):
     return out
 
 
+def load_augments(character, steward_chars=None):
+    """{item id: [[augment, ...], ...]}: the augments on his own gear in the inventory and wardrobes, as Steward saved them (Steward 1.2.0+, 2026-11-13).
+    {} when the saved copy has none (an older Steward, or findAll's copy): then only the augments his GearSwap files name are known."""
+    folder = steward_chars or os.path.join(WINDOWER, 'addons', 'Steward', 'data', 'chars')
+    path = os.path.join(folder, character + '.lua')
+    out = {}
+    if not os.path.exists(path):
+        return out
+    try:
+        t = lupa.LuaRuntime(unpack_returned_tuples=True).execute(open(path, encoding='utf-8').read())
+    except Exception:
+        return out
+    if t is None or t.augs is None:
+        return out
+    for bag, items in t.augs.items():
+        if str(bag) not in EQUIP_BAGS or not items:
+            continue
+        for iid, copies in items.items():
+            have = out.setdefault(int(iid), [])
+            for c in copies.values():
+                a = [str(x) for x in c.values()]
+                if a and a not in have:
+                    have.append(a)
+    return out
+
+
 def job_of(filename):
     """BLU from Name_BLU.lua / Name_Blu_Gear.lua / BLU.lua; None when the name doesn't say."""
     base = os.path.splitext(os.path.basename(filename))[0]
