@@ -38,6 +38,7 @@ import paths    # noqa: E402
 import pld      # noqa: E402
 import job_sets  # noqa: E402
 import gear_opt  # noqa: E402
+import shop  # noqa: E402
 import job_guides  # noqa: E402
 import pup      # noqa: E402
 import real     # noqa: E402
@@ -58,7 +59,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.30.0'
+VERSION = '2.31.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2053,6 +2054,31 @@ class App(tk.Tk):
         ToolTip(self.opt_hp_btn, "GearSwap puts the highest 'priority' on first: HP pieces first, so a swap never drops your HP on the way "
                                  "(the guides: HP management is one of a tank's most important jobs).")
 
+        # His plan (A1): the upgrade shopping list - across all his jobs, the gear he doesn't own that would improve the most sets
+        four = ttk.Frame(nb, padding=6)
+        nb.add(four, text='Shopping list')
+        top4 = ttk.Frame(four)
+        top4.pack(fill='x')
+        self.opt_shop_btn = ttk.Button(top4, text='Make my shopping list (all jobs)', command=self.opt_shop)
+        self.opt_shop_btn.pack(side='left')
+        ToolTip(self.opt_shop_btn, 'Looks at every judged set of every GearSwap file of this character and tries each piece you don\'t own in it. '
+                                   'Lists the pieces that would improve the most sets, with where each comes from. Takes a few minutes; nothing is '
+                                   'bought or changed. Items are judged on their plain text (no augments).')
+        self.opt_shop_stop = ttk.Button(top4, text='Stop', command=lambda: setattr(self, '_shop_stop', True), state='disabled')
+        self.opt_shop_stop.pack(side='left', padx=4)
+        self.opt_shop_note = ttk.Label(four, text='Double-click a piece to open its BG Wiki page.', foreground='#777', wraplength=460, justify='left')
+        self.opt_shop_note.pack(anchor='w', pady=(4, 2))
+        st = ttk.Treeview(four, columns=('sets', 'jobs', 'how'), show='tree headings', height=12)
+        for c_, h_, w_ in (('#0', 'Piece', 150), ('sets', 'Sets', 40), ('jobs', 'Jobs', 80), ('how', 'Where it comes from', 220)):
+            st.heading(c_, text=h_)
+            st.column(c_, width=w_, anchor='center' if c_ == 'sets' else 'w', stretch=c_ in ('#0', 'how'))
+        sb4 = ttk.Scrollbar(four, orient='vertical', command=st.yview)
+        st.configure(yscrollcommand=sb4.set)
+        st.pack(side='left', fill='both', expand=True)
+        sb4.pack(side='right', fill='y')
+        st.bind('<Double-1>', lambda e: self._opt_shop_open())
+        self.opt_shop_tree, self._shop_rows, self._shop_stop = st, {}, False
+
         low = ttk.Frame(tab)
         low.pack(fill='x', pady=(6, 0))
         b = ttk.Button(low, text='Tick all', command=lambda: self._opt_set_ticks(self._opt_tickable(), True))
@@ -2620,6 +2646,57 @@ class App(tk.Tk):
     def opt_write_ticked(self):
         rows = [r for r in self.opt_rows if r['path'] in self.opt_ticked and r.get('r')]
         self._opt_write(rows)
+
+    def opt_shop(self, wait=False, files=None):
+        who = self.who.get()
+        files = files if files is not None else doctor.files_for(who)
+        if not files:
+            self.opt_shop_note.config(text='No GearSwap files for this character.')
+            return
+        self._shop_stop = False
+        self.opt_shop_btn.config(state='disabled')
+        self.opt_shop_stop.config(state='normal')
+        subs = dict(self.cfg.get('subs') or {})
+        if self.items is None:
+            self.items = checks.Items()
+        if self._heal_data is None:
+            self._heal_data = healing.ItemData()
+
+        def work():
+            try:
+                found = shop.collect(who, files, subs, self.items, self._heal_data,
+                                     progress=lambda i, n, name: self._opt_post(lambda: self.opt_shop_note.config(text=f'{i + 1} / {n}: {name} ...'), wait),
+                                     stop=lambda: self._shop_stop)
+                rows, err = shop.ranked(found), None
+            except Exception as e:
+                rows, err = [], str(e)
+            self._opt_post(lambda: self._opt_shop_done(rows, err), wait)
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _opt_shop_done(self, rows, err=None):
+        self.opt_shop_btn.config(state='normal')
+        self.opt_shop_stop.config(state='disabled')
+        t = self.opt_shop_tree
+        t.delete(*t.get_children())
+        self._shop_rows = {}
+        for e in rows:
+            iid = t.insert('', 'end', text=f"{e['name']} ({e['slot']})", values=(len(e['sets']), ', '.join(sorted(e['jobs'])), e['how']))
+            self._shop_rows[iid] = e
+            for f_, p_, _ in e['sets'][:12]:
+                t.insert(iid, 'end', text='   ' + p_[len('sets.'):], values=('', '', f_))
+        self.opt_shop_note.config(text=f'Could not finish: {err}' if err else
+                                  (f"{len(rows)} pieces you don't own, the ones that help the most sets first. Open a piece to see which sets. "
+                                   'Double-click to open its BG Wiki page.' if rows else 'Nothing found that would do more than your own gear.')
+                                  + (' (stopped early)' if self._shop_stop else ''))
+
+    def _opt_shop_open(self):
+        sel = self.opt_shop_tree.selection()
+        e = self._shop_rows.get(sel[0]) if sel else None
+        if e and e.get('wiki'):
+            webbrowser.open(e['wiki'])
 
     def opt_fights(self, wait=False):
         """His plan (E5): the Doctor checks itself against his recorded fights; the lines go under the file checks."""
