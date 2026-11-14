@@ -58,7 +58,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.29.0'
+VERSION = '2.30.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2041,6 +2041,11 @@ class App(tk.Tk):
         self.opt_checks.config(state='disabled')
         self.opt_hp_btn = ttk.Button(three, text='Put HP pieces on first', command=self.opt_hp_order, state='disabled')
         self.opt_hp_btn.pack(anchor='w', pady=(4, 0))
+        self.opt_fights_btn = ttk.Button(three, text='Compare with my real fights', command=self.opt_fights)
+        self.opt_fights_btn.pack(anchor='w', pady=(4, 0))
+        ToolTip(self.opt_fights_btn, 'Needs the "Record my real damage" feature (Add features). For each monster you fought on this job: how often you '
+                                     'really hit (and the accuracy still missing), and your real weapon skill averages beside what the Doctor expects '
+                                     'with the set in your file.')
         self.opt_names_btn = ttk.Button(three, text='Fix the set names', command=self.opt_fix_names, state='disabled')
         self.opt_names_btn.pack(anchor='w', pady=(4, 0))
         ToolTip(self.opt_names_btn, 'A set named for a spell or ability that does not exist (a typo) is never used by GearSwap. This renames it to the '
@@ -2615,6 +2620,40 @@ class App(tk.Tk):
     def opt_write_ticked(self):
         rows = [r for r in self.opt_rows if r['path'] in self.opt_ticked and r.get('r')]
         self._opt_write(rows)
+
+    def opt_fights(self, wait=False):
+        """His plan (E5): the Doctor checks itself against his recorded fights; the lines go under the file checks."""
+        path = getattr(self, '_opt_path', None)
+        if not path:
+            return
+        who, sub = self.who.get(), self.opt_sub.get()
+        try:
+            import wsdist_runner as _W
+            spec = _W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), str(self.cfg.get('aftermath', 'auto'))) if self.ws_ready else None
+        except Exception:
+            spec = None
+        self.opt_status.config(text='Reading your recorded fights ...')
+
+        def work():
+            try:
+                lines, off = doctor.fight_check(who, path, sub, spec,
+                                                progress=None if wait else lambda m: self.after(0, lambda: self.opt_status.config(text=m + ' ...')))
+            except Exception as e:
+                lines, off = [f'Could not compare: {e}'], None
+
+            def done():
+                self.opt_status.config(text='')
+                tx = self.opt_checks
+                tx.config(state='normal')
+                tx.insert('end', '\nYour real fights\n' + '\n'.join(lines) + '\n')
+                tx.see('end')
+                tx.config(state='disabled')
+                self.opt_nb.select(2)
+            self._opt_post(done, wait)
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
 
     def opt_fix_names(self):
         if getattr(self, '_opt_names', None):
@@ -3699,6 +3738,10 @@ class App(tk.Tk):
         b.pack(side='left', padx=8)
         ToolTip(b, 'wsdist tries your gear (inventory and wardrobes) and keeps the set that does the most damage (weapon '
                    'skill) or gets TP the fastest (TP set) while having at least the damage taken you typed.')
+        b2 = ttk.Button(btns, text='Damage or safety?', command=self.sim_choices)
+        b2.pack(side='left')
+        ToolTip(b2, 'Builds the best set four times: with no limit, and with 30, 40 and 50 % damage taken. You see what each level of safety '
+                    'costs in damage (or TP speed) and pick one. Takes about four times as long as one build. Weapon skill and TP sets.')
         self.sim_apply_btn = ttk.Button(btns, text='Put it in this set', command=self.sim_apply, state='disabled')
         self.sim_apply_btn.pack(side='left', padx=8)
         self.sim_new_btn = ttk.Button(btns, text='Save it as a new set...', command=self.sim_save_new, state='disabled')
@@ -4223,6 +4266,109 @@ class App(tk.Tk):
             except Exception as e:
                 self.after(0, lambda e=e: self._sim_failed(e))
         threading.Thread(target=work, daemon=True).start()
+
+    # His plan 2026-11-13 (E4): "damage and survival in one answer" - the best set at no limit / 30 / 40 / 50 % damage taken, as choices.
+    def sim_choices(self):
+        name, set_path = self.sim_file.get(), self.sim_set.get()
+        job = checks.job_of(name or '') or ''
+        if not name or not set_path:
+            messagebox.showinfo('GearSwap Doctor', 'Pick a file and a set first.')
+            return
+        k = magic.kind_of(set_path, job)
+        if (pld.takes(set_path, job) or pup.is_pet_set(set_path, job) or job_sets.takes(set_path, job) or idle.is_idle(set_path) or k):
+            messagebox.showinfo('GearSwap Doctor', 'This is for weapon skill and TP sets: the sets where damage and damage taken pull against each other.')
+            return
+        if not updater.installed():
+            self.install_wsdist(ask=True)
+            return
+        if not self.ws_ready:
+            messagebox.showinfo('GearSwap Doctor', 'wsdist is still loading - try again in a moment.')
+            return
+        path = os.path.join(doctor.GS_DATA, name)
+        sub, tp, enemy = self.sim_sub.get(), int(self.sim_tp.get()), self.sim_enemy.get()
+        target = {k_: v for k_, v in self._sim_target().items() if k_ in ('main', 'sub')}       # (his weapons, not his damage taken numbers)
+        who = self.who.get()
+        metric = self.cfg.get('tp_metric', 'time')
+        buff_key, buffs = self.sim_buff_choice()
+        self.sim_status.config(text='wsdist is working: four builds ...')
+        self.progress.config(mode='indeterminate'); self.progress.start(12)
+
+        def work():
+            try:
+                import wsdist_runner as W
+                ld = self.loaded_file(path)
+                items = self.items or checks.Items()
+                bags = checks.load_bags(who) or {}
+                owned_ids = set()
+                for b, c in bags.items():
+                    if not b.startswith('_') and b in checks.EQUIP_BAGS:
+                        owned_ids |= set(c)
+                index = W.gear_index()
+                gear = doctor.with_weapons(next(s['gear'] for s in ld.sets if s['path'] == set_path), target)
+                weapons = [(s['path'], s['gear']) for s in ld.sets if s['path'].startswith('sets.weapons')]
+                names = set_name.FileInfo(ld, index)
+                wsd = None
+                if doctor.is_tp_set(set_path):
+                    tw, main_ws = doctor.tp_weapons(ld)
+                    plan = doctor.plan_set(names, set_path, gear, job, sub, owned_ids, items, index, buffs, None, tw, main_ws)
+                    what = 'tp'
+                else:
+                    what = doctor.ws_of(set_path, W.ws_list()) or doctor.ws_in(set_path, W.ws_list())
+                    if not what:
+                        raise ValueError(f"{set_path} isn't a weapon skill wsdist knows")
+                    plan = doctor.plan_set(names, set_path, gear, job, sub, owned_ids, items, index, buffs, what, weapons)
+                if plan['error']:
+                    raise ValueError(plan['error'])
+                owned, cur, notes, skill, spec = plan['owned'], plan['cur'], plan['notes'], plan['skill'], plan['spec']
+                if what == 'tp':
+                    wsd = doctor.tp_ws_damage(ld, job, sub, cur, owned_ids, items, index, tp, enemy, spec)
+                if 'main' not in cur:
+                    raise ValueError(f'no {skill or "matching"} weapon to test it with')
+                rows = doctor.dt_choices(job, sub, what, owned, cur, tp, enemy, metric, spec, wsd,
+                                         progress=lambda m: self.after(0, lambda: self.sim_status.config(text=m + ' ...')))
+                now_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in cur.items() if e and e.get('Name') != 'Empty'}
+                for r_ in rows:
+                    r_['gear'] = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in r_['best'].items() if e and e['Name'] != 'Empty'}
+                info = {'buffs': W.buff_text(buff_key)}
+                self.after(0, lambda: self._sim_choices_done(path, set_path, what, rows, now_gear, notes, tp, enemy, info, metric))
+            except Exception as e:
+                self.after(0, lambda e=e: self._sim_failed(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sim_choices_done(self, path, set_path, what, rows, now_gear, notes, tp, enemy, info, metric):
+        self.progress.stop(); self.progress.config(mode='determinate', value=0)
+        self.sim_status.config(text='Pick the trade you want in the window.')
+        w = tk.Toplevel(self)
+        w.title('Damage or safety? - ' + set_path)
+        w.geometry('760x300')
+        w.transient(self)
+        ttk.Label(w, text=f"{set_path}: the best set from your gear at each level of damage taken ({'time to a weapon skill' if what == 'tp' else what}, "
+                          f"{enemy}, {info.get('buffs', '')}). Pick one to see it; nothing changes in the file until you put it in.",
+                  wraplength=730, justify='left').pack(anchor='w', padx=10, pady=(10, 6))
+        self._sim_choice_rows = rows
+        for r_ in rows:
+            fr = ttk.Frame(w)
+            fr.pack(fill='x', padx=10, pady=2)
+            ttk.Button(fr, text='Show this one', command=lambda r_=r_: self._sim_choice_pick(w, path, set_path, what, r_, now_gear, notes, tp, enemy, info, metric)
+                       ).pack(side='left')
+            ttk.Label(fr, text=doctor.dt_choice_words(r_, what, metric), foreground='#333' if r_['met'] else '#b36b00').pack(side='left', padx=8)
+        ttk.Button(w, text='Close', command=w.destroy).pack(anchor='e', padx=10, pady=10)
+        return w
+
+    def _sim_choice_pick(self, w, path, set_path, what, r_, now_gear, notes, tp, enemy, info, metric):
+        """One choice shown in the tab as a normal result (its damage taken goes in the boxes, so "Put it in this set" and a later build agree)."""
+        for k_, v in self.sim_dt.items():
+            if k_ in ('dt', 'pdt', 'mdt'):
+                try:
+                    v.set(r_['dt'] if k_ == 'dt' else 0)
+                except Exception:
+                    pass
+        info2 = dict(info, now=r_.get('dt_now'), best=(-r_['has'][0], -r_['has'][1]), asked=(-float(r_['dt']), -float(r_['dt'])) if r_['dt'] else None)
+        try:
+            w.destroy()
+        except Exception:
+            pass
+        self._sim_done(path, set_path, what, r_['now'], r_['value'], now_gear, r_['gear'], notes, tp, enemy, info2, metric)
 
     def _sim_magic(self, find_best, wait=False):
         """A nuke set - black, scholar or blue magic: wsdist's spell maths (magic.py). A mage's weapons may change too."""

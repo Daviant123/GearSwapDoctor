@@ -114,5 +114,74 @@ def summary(character, folder, job=None):
     return f"Real fights recorded: {uses:,} weapon skills ({len(names)} kinds) on {len(m)} monsters, most on {m[0]}."
 
 
+# ------------------------------------------------------------------ the Doctor checks itself (PLAN.md E5, 2026-11-14)
+SWINGS_ENOUGH = 100
+
+
+def gaps(rows, job=None, most=6):
+    """Per monster fought: [{'mob', 'melee': {n, hit_rate, crit_rate, avg} or None, 'acc_short': accuracy still missing for the 95 % cap (None: too few
+    swings to say), 'ws': [{'name', 'weapon', 'tp', 'hits', 'miss', 'avg'}]}], most-fought first."""
+    rows = [r for r in rows if not job or r['job'] == job]
+    out = []
+    for mob in mobs(rows)[:most]:
+        mine = [r for r in rows if r['mob'] == mob]
+        m = melee(mine)
+        short = None
+        if m and m['n'] >= SWINGS_ENOUGH:
+            short = max(0, round((95 - m['hit_rate']) * 2))
+        by = {}
+        for r in mine:
+            if r['kind'] == 'ws':
+                by.setdefault((r['name'], r['weapon']), []).append(r)
+        wss = []
+        for (name, weapon), rs in sorted(by.items(), key=lambda kv: -sum(r['n'] for r in kv[1])):
+            t = _sum(rs)
+            tps = {}
+            for r in rs:
+                tps[r['tp']] = tps.get(r['tp'], 0) + r['n']
+            wss.append({'name': name, 'weapon': weapon, 'tp': max(tps, key=lambda k: (tps[k], k)), 'hits': t['hits'], 'miss': t['miss'], 'avg': t['avg']})
+        out.append({'mob': mob, 'melee': m, 'acc_short': short, 'ws': wss[:4]})
+    return out
+
+
+def gap_lines(found, simulated=None):
+    """Plain lines for gaps(): what really happened beside what the Doctor expected. simulated: {(mob, ws name): wsdist's average} where it could be worked out.
+    Returns (lines, average % wsdist is off by, or None)."""
+    simulated = simulated or {}
+    lines, diffs = [], []
+    for g in found:
+        m = g['melee']
+        if m and m['n']:
+            line = f"{g['mob']}: {m['n']:,} swings, {m['hit_rate']:.1f} % hit, {m['crit_rate']:.1f} % crits."
+            if g['acc_short'] is None:
+                line += ' Too few swings to judge accuracy.'
+            elif g['acc_short'] > 0:
+                line += f" You miss more than the cap allows: about {g['acc_short']} more accuracy would reach 95 %."
+            else:
+                line += ' Accuracy is at the cap here: any more is wasted on this monster.'
+        else:
+            line = f"{g['mob']}: no auto-attacks recorded."
+        lines.append(line)
+        for w in g['ws']:
+            sim = simulated.get((g['mob'], w['name']))
+            part = f"   {w['name']} ({w['weapon'] or 'weapon?'}, about {w['tp']} TP): {w['hits']} hits, real average {w['avg']:,.0f}"
+            if sim:
+                d = (w['avg'] - sim) / sim * 100
+                part += f"; the Doctor expected {sim:,.0f} with the set in your file: real is {abs(d):.0f} % {'higher' if d >= 0 else 'lower'}"
+                if w['hits'] >= ENOUGH:
+                    diffs.append(d)
+            if w['hits'] < ENOUGH:
+                part += ' (too few to trust yet)'
+            lines.append(part + '.')
+    off = sum(diffs) / len(diffs) if diffs else None
+    if off is not None:
+        lines.append('')
+        lines.append(f"Over {len(diffs)} weapon skill / monster pair(s) with enough data, your real damage is {abs(off):.0f} % "
+                     f"{'higher' if off >= 0 else 'lower'} than the Doctor expects"
+                     + (': close enough to trust its ranking of sets.' if abs(off) <= 15 else
+                        ': the buffs, the monster or the TP you set in the Doctor probably differ from the real fights (it compares sets fairly either way).'))
+    return lines, off
+
+
 def files(folder):
     return glob.glob(os.path.join(folder, 'gsd_fights_*.csv'))

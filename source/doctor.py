@@ -701,6 +701,108 @@ def replan(character, path, set_path, sub, target):
     return None
 
 
+def fight_check(character, path, sub='WAR', buffs=None, folder=None, progress=None, most=6):
+    """The Doctor against his recorded fights (real_fights.gaps) for one GearSwap file: (lines, how far off wsdist is on average or None).
+    Where wsdist knows the monster and the file has a set for the weapon skill, its expected average is worked out with that set."""
+    import real_fights
+    import set_name
+    folder = folder or GS_DATA
+    job = checks.job_of(path)
+    found = real_fights.gaps(real_fights.read(character, folder), job, most)
+    if not found:
+        return ['No real fights recorded for this job yet. Turn on "Record my real damage" in Add features, fight, then come back.'], None
+    sim = {}
+    try:
+        import wsdist_runner as W
+        known_mobs, known_ws = set(W.enemies()), W.ws_list()
+        loaded = gs_loader.load(path)
+        items = checks.Items()
+        bags = checks.load_bags(character) or {}
+        owned_ids = set()
+        for b, c in bags.items():
+            if not b.startswith('_') and b in checks.EQUIP_BAGS:
+                owned_ids |= set(c)
+        index = W.gear_index()
+        names = set_name.FileInfo(loaded, index)
+        weapons = [(s['path'], s['gear']) for s in loaded.sets if s['path'].startswith('sets.weapons')]
+        by_ws = {}
+        for s in loaded.sets:
+            w = ws_of(s['path'], known_ws)
+            if w and (w not in by_ws or s['path'].count('.') < by_ws[w]['path'].count('.')):
+                by_ws[w] = s
+        for g in found:
+            if g['mob'] not in known_mobs:
+                continue
+            for w in g['ws']:
+                s = by_ws.get(w['name'])
+                if not s:
+                    continue
+                if progress:
+                    progress(f"wsdist: {w['name']} on {g['mob']}")
+                try:
+                    gear = with_weapons(s['gear'], {'main': w['weapon']} if w['weapon'] else None)
+                    plan = plan_set(names, s['path'], gear, job, sub, owned_ids, items, index, buffs, w['name'], weapons)
+                    if plan['error'] or 'main' not in plan['cur']:
+                        continue
+                    sim[(g['mob'], w['name'])] = W.set_damage(job, sub, w['name'], plan['cur'], tp=max(1000, int(w['tp']) or 1000), enemy_name=g['mob'], buffs=plan['spec'])
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    lines, off = real_fights.gap_lines(found, sim)
+    unknown = [g['mob'] for g in found if g['ws'] and not any((g['mob'], w['name']) in sim for w in g['ws'])]
+    if unknown:
+        lines.append(f"No expected damage for: {', '.join(unknown[:4])} (wsdist doesn't know the monster, or the file has no set for the weapon skill).")
+    return lines, off
+
+
+DT_LEVELS = (0, 30, 40, 50)
+
+
+def dt_choices(job, sub, what, owned, cur, tp=1000, enemy='Apex Toad', metric='time', spec=None, wsd=None, levels=DT_LEVELS, progress=None):
+    """Damage and survival in one answer (PLAN.md E4, 2026-11-14): the best set from his gear at each level of damage taken, so he picks the trade.
+    what: a weapon skill name or 'tp'. Returns [{'dt': level asked, 'value' (damage, or what the TP metric measures), 'best': {wsdist slot: entry},
+    'has': (physical, magic) "% less" the set really has, 'met': it reaches the level, 'loss': % worse than the free set (0 for the first)}]."""
+    import wsdist_runner as W
+    out = []
+    lower_better = what == 'tp' and metric == 'time'
+    for lv in levels:
+        if progress:
+            progress(f"wsdist: {'no limit' if not lv else f'{lv} % damage taken'}")
+        req = (-float(lv), -float(lv)) if lv else None
+        info = {}
+        if what == 'tp':
+            best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=spec, ws_damage=wsd)
+        else:
+            best, val, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=spec)
+        has = info.get('best') or (0, 0)
+        has = (round(-has[0]), round(-has[1]))
+        out.append({'dt': lv, 'value': val, 'now': now, 'best': best, 'has': has, 'met': not lv or (has[0] >= lv - 0.5 and has[1] >= lv - 0.5),
+                    'dt_now': info.get('now')})
+    free = out[0]['value'] if out else 0
+    for r in out:
+        if not free:
+            r['loss'] = 0.0
+        elif lower_better:
+            r['loss'] = round((r['value'] - free) / free * 100, 1)
+        else:
+            r['loss'] = round((free - r['value']) / free * 100, 1)
+    return out
+
+
+def dt_choice_words(r, what, metric='time'):
+    """One plain line for a choice: '40 % damage taken: 31,200 damage (4.1 % less)'."""
+    if what == 'tp':
+        num = f"{r['value']:.2f} s to a weapon skill" if metric == 'time' else f"{r['value']:,.0f}"
+        worse = 'slower' if metric == 'time' else 'less'
+    else:
+        num, worse = f"{r['value']:,.0f} damage", 'less'
+    head = 'No limit' if not r['dt'] else f"{r['dt']} % damage taken"
+    tail = '' if not r['dt'] else (f" ({r['loss']:.1f} % {worse})" if r['loss'] > 0.05 else ' (costs nothing)')
+    short = '' if r['met'] else f" - your gear only reaches {r['has'][0]} % / {r['has'][1]} %"
+    return f"{head}: {num}{tail}; the set has {r['has'][0]} % physical / {r['has'][1]} % magic{short}"
+
+
 def is_tp_set(path):
     """A TP (engaged / melee) set: sets.engaged..., or sets.TP... as some files name them."""
     import fixer
