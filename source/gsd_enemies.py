@@ -20,6 +20,50 @@ LOCUS = {
     'Locus Armet Beetle': (134, None, None, None, "King Ranperre's Tomb"),
     'Locus Tomb Worm': (132, None, None, None, "King Ranperre's Tomb"),
 }
+# Content monsters (PLAN.md A3, 2026-11-14): BG Wiki gives their level but not Defense or Evasion, so both are estimated from the level with wsdist's
+# Apex table (the same way as a Locus page with gaps) and every result says so. Levels: BG Wiki Bumba (139), Category:Sortie (sector foes A 119-121 ...
+# H 137-139, Naakuals 140). Sortie's bosses have no level on the wiki: the Naakual's 140 stands for them.
+CONTENT = {
+    'Odyssey boss (level 139)': (139, None, None, None, 'Sheol Gaol'),
+    'Sortie foes A-D (level 126)': (126, None, None, None, 'Sortie'),
+    'Sortie foes E-H (level 137)': (137, None, None, None, 'Sortie'),
+    'Sortie boss / Naakual (level 140)': (140, None, None, None, 'Sortie'),
+}
+LOCUS = dict(LOCUS, **CONTENT)
+
+# Where he is going: the monster and the buffs a set is judged with, in one pick. buffs: a key of wsdist_runner.BUFF_PRESETS. A profile with no
+# monster keeps the one he has picked (Dynamis and Ambuscade monsters have no published level to estimate from; Ambuscade changes every month).
+PROFILES = [
+    {'name': 'Apex monsters with trusts (solo)', 'enemy': 'Apex Toad', 'buffs': 'solo',
+     'what': 'Farming Apex monsters alone: food and trust buffs (Haste II, two Marches).'},
+    {'name': 'Apex monsters in a party', 'enemy': 'Apex Bat', 'buffs': 'party',
+     'what': 'An experience or capacity party: a healer, a Bard and a Corsair.'},
+    {'name': 'Master levels (Locus monsters)', 'enemy': 'Locus Colibri', 'buffs': 'party',
+     'what': 'A master level party on Locus monsters.'},
+    {'name': 'Odyssey boss (Sheol Gaol)', 'enemy': 'Odyssey boss (level 139)', 'buffs': 'party',
+     'what': 'A Sheol Gaol boss. Level 139 is from BG Wiki; its Defense and Evasion are estimated from that level, and a real Vengeance fight is harder.'},
+    {'name': 'Sortie, sectors A-D', 'enemy': 'Sortie foes A-D (level 126)', 'buffs': 'party',
+     'what': 'Sortie ground floor foes (levels 119-133). Defense and Evasion estimated from the level.'},
+    {'name': 'Sortie, sectors E-H', 'enemy': 'Sortie foes E-H (level 137)', 'buffs': 'party',
+     'what': 'Sortie basement foes (levels 134-139). Defense and Evasion estimated from the level.'},
+    {'name': 'Sortie bosses', 'enemy': 'Sortie boss / Naakual (level 140)', 'buffs': 'party',
+     'what': 'Sortie bosses: BG Wiki gives them no level, so the Naakuals\' 140 stands in. Defense and Evasion estimated.'},
+    {'name': 'Dynamis - Divergence', 'enemy': None, 'buffs': 'party',
+     'what': 'Party buffs. No level is published for its monsters, so the monster you picked stays.'},
+    {'name': 'Ambuscade', 'enemy': None, 'buffs': 'party',
+     'what': 'Party buffs. The monster changes every month, so the monster you picked stays.'},
+]
+
+
+def profile(name):
+    return next((p for p in PROFILES if p['name'] == name), None)
+
+
+def profile_of(enemy, buffs):
+    """The profile these settings are, or '' (his own mix)."""
+    return next((p['name'] for p in PROFILES if p['enemy'] == enemy and p['buffs'] == buffs), '')
+
+
 STATS = ('VIT', 'AGI', 'MND', 'INT', 'CHR')
 _estimated = {}
 
@@ -62,6 +106,8 @@ def note(name):
     if name not in _estimated:
         return ''
     guessed = _estimated[name]
+    if name in CONTENT:
+        return f"{name}: its level is from BG Wiki; Defense and Evasion are estimated from the level, so treat the numbers as a guide"
     if guessed:
         return f"{name}: {' and '.join(guessed)} not on BG Wiki yet, estimated from its level"
     return f"{name}: Defense and Evasion from BG Wiki"

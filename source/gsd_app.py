@@ -39,6 +39,7 @@ import pld      # noqa: E402
 import job_sets  # noqa: E402
 import gear_opt  # noqa: E402
 import shop  # noqa: E402
+import gsd_enemies  # noqa: E402
 import job_guides  # noqa: E402
 import pup      # noqa: E402
 import real     # noqa: E402
@@ -59,7 +60,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.32.0'
+VERSION = '2.33.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -4890,6 +4891,16 @@ class App(tk.Tk):
         self.nb.add(tab, text='Settings')
         ws = ttk.LabelFrame(tab, text='wsdist in the check-ups', padding=8)
         ws.pack(fill='x')
+        # His plan (A3): content profiles - where he is going sets the monster and the buffs in one pick
+        ttk.Label(ws, text='Where are you going?').grid(row=0, column=2, sticky='w', padx=(24, 0))
+        self.cfg_profile = ttk.Combobox(ws, values=['(my own mix)'] + [p['name'] for p in gsd_enemies.PROFILES], width=32, state='readonly')
+        self.cfg_profile.set(gsd_enemies.profile_of(self.cfg.get('enemy'), self.cfg.get('buffs')) or '(my own mix)')
+        self.cfg_profile.grid(row=0, column=3, sticky='w', padx=6)
+        self.cfg_profile.bind('<<ComboboxSelected>>', lambda e: self.pick_profile())
+        ToolTip(self.cfg_profile, 'Sets the monster and the buffs your sets are judged with, for that kind of content. You can still change either '
+                                  'below. Press Save to keep it.')
+        self.cfg_profile_note = ttk.Label(ws, text='', foreground='#555', wraplength=420, justify='left')
+        self.cfg_profile_note.grid(row=1, column=2, columnspan=2, rowspan=2, sticky='nw', padx=(24, 0))
         ttk.Label(ws, text='TP').grid(row=0, column=0, sticky='w')
         self.cfg_tp = tk.IntVar(value=self.cfg['tp'])
         ttk.Spinbox(ws, from_=1000, to=3000, increment=100, textvariable=self.cfg_tp, width=6).grid(row=0, column=1, sticky='w', padx=6)
@@ -5128,6 +5139,20 @@ class App(tk.Tk):
         self.cfg['buffs_custom'] = self.custom_buffs_now()
         save_settings(self.cfg)
         self.buff_win.destroy()
+
+    def pick_profile(self):
+        p = gsd_enemies.profile(self.cfg_profile.get())
+        if not p:
+            self.cfg_profile_note.config(text='')
+            return
+        note = p['what']
+        if p['enemy']:
+            if p['enemy'] not in (self.enemy_list or []):
+                self.enemy_list = list(self.enemy_list or []) + [p['enemy']]
+            self.cfg_enemy.configure(values=self.enemy_list)
+            self.cfg_enemy.set(p['enemy'])
+        self.cfg_buffs.set(W.BUFF_CHOICES[p['buffs']])
+        self.cfg_profile_note.config(text=note + ' Press Save; the next check-up and Gear Optimization use it.')
 
     def save_cfg(self):
         self.cfg['tp'] = int(self.cfg_tp.get())

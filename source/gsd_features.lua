@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 6.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 7.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 6, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 7, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -290,6 +290,7 @@ function G.box_update()
     if on('lowhp') and G.low_hp then parts[#parts + 1] = 'LOW HP' end
     if on('haste') and G.haste_short then parts[#parts + 1] = G.haste_short end
     if on('acc') and G.acc_short then parts[#parts + 1] = G.acc_short end
+    if on('warn') and G.warn_short and G.warn_short ~= '' then parts[#parts + 1] = G.warn_short end
     if G.box.text then G.box:text('GSD  ' .. table.concat(parts, '  |  ')) end
     if G.box.show and not G.hidden then G.box:show() end
 end
@@ -306,6 +307,7 @@ local HELP = {
     'unlock - free the ring slots', 'box - show / hide the window', 'refresh - put your gear back on',
     'haste - how much haste you have and what is still missing',
     'acc - your accuracy and Double Attack now, and what they come from',
+    'warn - your real hit rate on this monster and the damage taken you are wearing',
 }
 function G.command(w)
     local c = low(w[2])
@@ -340,6 +342,11 @@ function G.command(w)
     elseif c == 'haste' then
         local h = G.haste_now()
         if h then say(G.haste_words(h)) else say('haste: nothing to read yet') end
+    elseif c == 'warn' then
+        local rate, n, mob = G.hit_now()
+        local ok, pd, md = pcall(G.dt_now)
+        say((rate and ('you hit %s %.0f %% of the time (last %d swings)'):format(mob, rate, n) or 'hit rate: fewer than 20 swings so far')
+            .. (ok and pd and ('; damage taken from the gear you wear: %d %% physical, %d %% magic'):format(pd, md) or ''))
     elseif c == 'acc' then
         local ok, a = pcall(G.acc_now)
         if ok and a then say(G.acc_words(a)) else say('accuracy: nothing to read yet') end
@@ -849,6 +856,154 @@ local function acc_action(act)
     end
 end
 
+-- ------------------------------------------------------------------ Warnings while you fight (PLAN.md A4, 2026-11-14)
+-- Three things the guides call mistakes, said when they happen:
+--   hit rate  your own swings on the monster in front of you, as they really land (the game never sends a monster's Evasion, so it is counted from
+--             the hits and misses it shows you): under the cap for the last 50 swings = how much accuracy is missing (2 accuracy a %)
+--   damage taken  fighting with less than the damage taken you set, read from the gear you wear (its text and augments)
+--   max HP    a gear swap that cuts your max HP by more than you set: that HP is gone until it is healed back
+local warn_cache = {}
+
+local function dt_item(it)
+    local key = tostring(it.id) .. '/' .. tostring(it.extdata)
+    if warn_cache[key] then return warn_cache[key] end
+    local out = { dt = 0, pdt = 0, mdt = 0 }
+    local res = gearswap and gearswap.res
+    local d = res and res.item_descriptions and res.item_descriptions[it.id]
+    local text = d and d.en or ''
+    local from = 1
+    while true do
+        local a, b, word = text:find('(%a+):', from)
+        if not a then break end
+        if word ~= 'DEF' and word ~= 'DMG' and word ~= 'Delay' then text = text:sub(1, a - 1) break end
+        from = b + 1
+    end
+    local function read(s)
+        for kind, n in s:gmatch('(%a*) ?[Dd]amage taken ?%-(%d+)') do
+            local k = kind:lower()
+            if k == 'physical' then out.pdt = out.pdt + tonumber(n) elseif k == 'magic' then out.mdt = out.mdt + tonumber(n)
+            elseif k ~= 'breath' then out.dt = out.dt + tonumber(n) end
+        end
+        for kind, n in s:gmatch('(%a+)%.? dmg%. taken ?%-(%d+)') do
+            local k = kind:lower()
+            if k:sub(1, 4) == 'phys' then out.pdt = out.pdt + tonumber(n) elseif k:sub(1, 3) == 'mag' then out.mdt = out.mdt + tonumber(n) end
+        end
+    end
+    read(text)
+    local ok, dec = pcall(function() return gearswap.extdata.decode(it) end)
+    for _, aug in ipairs(ok and type(dec) == 'table' and dec.augments or {}) do
+        if type(aug) == 'string' and not aug:find(':') then read(aug) end
+    end
+    warn_cache[key] = out
+    return out
+end
+
+-- (physical, magic) damage taken "% less" of the gear worn now, each capped at 50
+function G.dt_now()
+    local eq = windower.ffxi.get_items and windower.ffxi.get_items('equipment')
+    if type(eq) ~= 'table' then return nil end
+    local dt, pdt, mdt = 0, 0, 0
+    for _, slot in ipairs(WORN) do
+        local idx = eq[slot]
+        if idx and idx ~= 0 then
+            local it = windower.ffxi.get_items(eq[slot .. '_bag'], idx)
+            if type(it) == 'table' and it.id and it.id ~= 0 then
+                local st = dt_item(it)
+                dt, pdt, mdt = dt + st.dt, pdt + st.pdt, mdt + st.mdt
+            end
+        end
+    end
+    return math.min(50, dt + pdt), math.min(50, dt + mdt)
+end
+
+local WARN_SWINGS = 50
+-- your own swing landed or missed: the last 50 on this monster
+local function warn_swing(mob, hit)
+    local w = G.warn_hits
+    if not w or w.mob ~= mob then w = { mob = mob, list = {}, hits = 0 } G.warn_hits = w end
+    w.list[#w.list + 1] = hit
+    if hit then w.hits = w.hits + 1 end
+    if #w.list > WARN_SWINGS then
+        if table.remove(w.list, 1) then w.hits = w.hits - 1 end
+    end
+end
+
+function G.hit_now()
+    local w = G.warn_hits
+    if not w or #w.list < 20 then return nil end
+    return w.hits / #w.list * 100, #w.list, w.mob
+end
+
+local function warn_action(act)
+    if not on('warn') or not act or act.category ~= 1 or act.actor_id ~= me_id() then return end
+    for _, t in ipairs(act.targets or {}) do
+        local m = windower.ffxi.get_mob_by_id(t.id)
+        if m and m.is_npc ~= false and m.name then
+            for _, a in ipairs(t.actions or {}) do
+                if FIGHT_HIT[a.message] then warn_swing(m.name, true) elseif FIGHT_MISS[a.message] then warn_swing(m.name, false) end
+            end
+        end
+    end
+end
+
+local function warn_say(key, msg)
+    local now = os.clock()
+    G.warn_told = G.warn_told or {}
+    if (G.warn_told[key] or -999) + (cfg.warn.again or 60) > now then return end
+    G.warn_told[key] = now
+    add_to_chat(167, 'GearSwap Doctor: ' .. msg)
+end
+
+-- every 2 s: the window line and the warnings
+function G.warn_tick(status, p)
+    if not on('warn') then return end
+    local now = os.clock()
+    if now < (G.warn_next or 0) then return end
+    G.warn_next = now + 2
+    local c = cfg.warn
+    local parts = {}
+    -- max HP cut by a swap (any time: casting sets do it)
+    local max_hp = p and p.vitals and p.vitals.max_hp
+    if max_hp and (c.hp or 0) > 0 then
+        local was = G.warn_maxhp
+        if was and was - max_hp >= c.hp then
+            warn_say('hp', ('a gear swap cut your max HP by %d (%d -> %d): that HP is lost until it is healed back'):format(was - max_hp, was, max_hp))
+        end
+        G.warn_maxhp = max_hp
+    end
+    if status == 1 and not (midaction and midaction()) then
+        if c.hit ~= false then
+            local rate, n, mob = G.hit_now()
+            if rate then
+                parts[#parts + 1] = ('Hit %.0f%%'):format(rate)
+                local cap = tonumber(c.cap) or 95
+                if n >= WARN_SWINGS and rate < cap - 4 then
+                    warn_say('hit', ('you hit %s %.0f %% of the time (last %d swings): about %d more accuracy would reach %d %%')
+                             :format(mob, rate, n, math.floor((cap - rate) * 2 + 0.5), cap))
+                end
+            end
+        end
+        if (c.dt or 0) > 0 then
+            local ok, pd, md = pcall(G.dt_now)
+            if ok and pd then
+                parts[#parts + 1] = ('DT %d/%d'):format(pd, md)
+                if pd < c.dt then
+                    G.warn_low = (G.warn_low or 0) + 1
+                    if G.warn_low >= 3 then            -- (it has stayed low for 6 s: not a weapon skill set passing by)
+                        warn_say('dt', ('fighting with %d %% physical damage taken from gear: you set %d %% as your floor'):format(pd, c.dt))
+                    end
+                else
+                    G.warn_low = 0
+                end
+            end
+        end
+    else
+        G.warn_low = 0
+    end
+    local short = table.concat(parts, '  ')
+    if short ~= (G.warn_short or '') then G.warn_short = short G.box_update() end
+end
+
 local function fight_am()
     return G.am_level and (G.am_level() or -1) or -1
 end
@@ -1119,6 +1274,7 @@ local function tick()
     end
     G.haste_tick(status)
     G.acc_tick(status)
+    G.warn_tick(status, p)
     G.tools_tick()
     if on('fights') and now - (G.fights_t or 0) > 60 then
         G.fights_t = now
@@ -1184,7 +1340,7 @@ function G.install()
         pcall(G.fights_flush)
         if G.box and G.box.destroy then G.box:destroy() end
     end)
-    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') or on('tools') or on('acc') then
+    if on('kiting') or on('lowhp') or on('refresh') or on('th') or on('aftermath') or on('haste') or on('fights') or on('tools') or on('acc') or on('warn') then
         windower.raw_register_event('prerender', tick)
     end
     if on('tools') then windower.raw_register_event('outgoing text', function(o) pcall(tools_text, o) end) end
@@ -1193,6 +1349,7 @@ function G.install()
         windower.raw_register_event('action', function(act) pcall(on_fight, act) end)
     end
     if on('haste') then windower.raw_register_event('action', on_spell) end
+    if on('warn') then windower.raw_register_event('action', function(act) pcall(warn_action, act) end) end
     if on('acc') then
         windower.raw_register_event('action', function(act) pcall(acc_action, act) end)
         windower.raw_register_event('incoming chunk', acc_chunk)

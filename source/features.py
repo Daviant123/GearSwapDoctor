@@ -256,6 +256,18 @@ FEATURES = [
               ('extra', 'int', 'Accuracy your job points / merits add', 0, {'lo': 0, 'hi': 100, 'step': 1}),
               ('da_extra', 'int', 'Double Attack your job points / merits add (%)', 0, {'lo': 0, 'hi': 30, 'step': 1})],
      'jobs': MELEE, 'already': r'Double Attack.*accuracy|acc_display|show_acc'},
+    # (his plan 2026-11-13, A4: live in-game warnings)
+    {'key': 'warn', 'title': 'Warnings while you fight (hit rate, damage taken, max HP)', 'group': 'Fighting',
+     'what': 'Says so in the chat when something the guides call a mistake happens: you are missing the monster in front of you (your real hit rate '
+             'over the last 50 swings, and about how much accuracy is missing), you are fighting with less damage taken than you set, or a gear '
+             'swap cut your max HP. The small window shows "Hit 91%  DT 42/38". //gs c gsd warn says it any time. The game doesn\'t send a '
+             'monster\'s Evasion, so the hit rate is counted from your own hits and misses.',
+     'opts': [('hit', 'bool', 'Warn when I miss more than the cap allows', True, {}),
+              ('cap', 'choice', 'Hit rate cap of my weapon (%)', '95', {'values': ['95', '99']}),
+              ('dt', 'int', 'Warn when fighting below this damage taken % (0 = never)', 0, {'lo': 0, 'hi': 50, 'step': 5}),
+              ('hp', 'int', 'Warn when a swap cuts max HP by this much (0 = never)', 0, {'lo': 0, 'hi': 2000, 'step': 50}),
+              ('again', 'int', 'Seconds before the same warning again', 60, {'lo': 10, 'hi': 600, 'step': 10})],
+     'jobs': MELEE, 'already': r'hit rate|missing accuracy'},
     {'key': 'aftermath', 'title': 'Aftermath gear (AM1 / AM2 / AM3)', 'group': 'Fighting',
      'what': 'While you fight with Aftermath up, gear for that level goes on, and your normal set comes back when it wears off. It uses what you pick '
              'for that level; otherwise it looks for sets named for it: sets.engaged.Liberator.AM3, sets.engaged.Liberator.AM, sets.engaged.AM3, '
@@ -824,7 +836,7 @@ def simulate_src(src, name, engine):
     run('buff_change', 'Doom', False)
     run('buff_change', 'Aftermath: Lv.3', True)
     run('buff_change', 'Aftermath: Lv.3', False)
-    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste', 'gsd acc'):
+    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste', 'gsd acc', 'gsd warn'):
         run('self_command', c)
     ok, e = L.globals().SIM_TICK(S)
     if not ok and 'gsd-features' in str(e):
@@ -845,7 +857,7 @@ NEEDS = {'doom': ('gear',), 'sleep': ('gear',), 'kiting': ('gear', 'set'), 'refr
 COMMANDS = {'dt': ['//gs c gsd dt'], 'th': ['//gs c gsd th', '//gs c gsd th off / tag / always'],
             'weapons': ['//gs c gsd weapons'], 'reraise': ['//gs c gsd reraise'],
             'rings': ['//gs c gsd warp', '//gs c gsd dim', '//gs c gsd xp', '//gs c gsd cp', '//gs c gsd unlock'],
-            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste'], 'acc': ['//gs c gsd acc']}
+            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste'], 'acc': ['//gs c gsd acc'], 'warn': ['//gs c gsd warn']}
 
 
 def missing(conf):
