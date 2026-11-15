@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 8.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 9.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 8, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 9, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -1455,6 +1455,15 @@ function G.install()
     if on('warn') then windower.raw_register_event('action', function(act) pcall(warn_action, act) end) end
     if on('accession') and cfg.accession.chat ~= false then
         windower.raw_register_event('chat message', function(message, sender, mode) pcall(acc_chat, message, sender, mode) end)
+        -- (his report 2026-11-15 "typing sneak, invis, deo does not work in the chat": the event above is only for what others say, so the line
+        -- he types himself counts too - "/p sneak", or just "sneak" in whatever chat mode he is in. The line still goes out as he typed it.)
+        windower.raw_register_event('outgoing text', function(original)
+            pcall(function()
+                local text = tostring(original or '')
+                local said = text:match('^/p%s+(.+)$') or text:match('^/party%s+(.+)$') or (text:sub(1, 1) ~= '/' and text) or nil
+                if said then acc_chat(said, nil, 4) end
+            end)
+        end)
     end
     if on('macro') then
         wrap('sub_job_change', nil, function() G.macro_set(1) end)
