@@ -303,6 +303,24 @@ FEATURES = [
               ('trump', 'bool', 'Corsair: Trump Card Case first', True, {}),
               ('ahead', 'bool', 'Open the next bag when the last tool is used (not only when you try)', True, {})],
      'jobs': MELEE, 'already': r'Toolbag|Card Case'},
+    # (his request 2026-11-15: "a feature that lets me select a macro book for the gearswap")
+    {'key': 'macro', 'title': 'Macro book for this job', 'group': 'Comfort',
+     'what': 'When this GearSwap file loads (you change to the job) your macro book and page go on by themselves, and again when you change sub '
+             'job. A sub job can have its own page: write them like NIN=2, DNC=3. //gs c gsd macro puts it on again.',
+     'opts': [('book', 'int', 'Macro book', 1, {'lo': 1, 'hi': 40, 'step': 1}),
+              ('page', 'int', 'Page (macro set)', 1, {'lo': 1, 'hi': 10, 'step': 1}),
+              ('subs', 'text', 'Other page for a sub job (NIN=2, DNC=3)', '', {})],
+     'already': r'set_macro_page|macro book|select_default_macro_book'},
+    # (his request 2026-11-15: Accession on Sneak / Invisible / Deodorize for a SCH or /SCH, by command or when asked in party chat)
+    {'key': 'accession', 'title': 'Accession on Sneak, Invisible, Deodorize (SCH or /SCH)', 'group': 'Casting',
+     'what': 'With Scholar as main or sub job: when you cast Sneak, Invisible or Deodorize, Accession goes on first so the whole party in range '
+             'gets it (it needs a stratagem charge; with none left the spell goes on one person and it says so). //gs c gsd sneak, invis, deo or '
+             'si (Sneak then Invisible) cast them on you. It can also cast them when someone says "sneak", "invis" or "deo" in party chat. '
+             'Normal game commands only.',
+     'opts': [('sneak', 'bool', 'Sneak', True, {}), ('invisible', 'bool', 'Invisible', True, {}), ('deodorize', 'bool', 'Deodorize', True, {}),
+              ('arts', 'bool', 'Put Light Arts up first when it is not', True, {}),
+              ('chat', 'bool', 'Cast when someone asks in party chat ("sneak", "invis", "deo")', True, {})],
+     'already': r'Accession'},
     {'key': 'box', 'title': 'Small window with the modes', 'group': 'Modes',
      'what': 'A small window that shows DT / Treasure Hunter / weapon lock / reraise as they change. Drag it where you '
              'want it; //gs c gsd box hides / shows it.',
@@ -836,7 +854,7 @@ def simulate_src(src, name, engine):
     run('buff_change', 'Doom', False)
     run('buff_change', 'Aftermath: Lv.3', True)
     run('buff_change', 'Aftermath: Lv.3', False)
-    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste', 'gsd acc', 'gsd warn'):
+    for c in ('gsd help', 'gsd dt', 'gsd th', 'gsd weapons', 'gsd reraise', 'gsd refresh', 'gsd box', 'gsd warp', 'gsd unlock', 'gsd haste', 'gsd acc', 'gsd warn', 'gsd macro', 'gsd si'):
         run('self_command', c)
     ok, e = L.globals().SIM_TICK(S)
     if not ok and 'gsd-features' in str(e):
@@ -857,7 +875,7 @@ NEEDS = {'doom': ('gear',), 'sleep': ('gear',), 'kiting': ('gear', 'set'), 'refr
 COMMANDS = {'dt': ['//gs c gsd dt'], 'th': ['//gs c gsd th', '//gs c gsd th off / tag / always'],
             'weapons': ['//gs c gsd weapons'], 'reraise': ['//gs c gsd reraise'],
             'rings': ['//gs c gsd warp', '//gs c gsd dim', '//gs c gsd xp', '//gs c gsd cp', '//gs c gsd unlock'],
-            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste'], 'acc': ['//gs c gsd acc'], 'warn': ['//gs c gsd warn']}
+            'box': ['//gs c gsd box'], 'haste': ['//gs c gsd haste'], 'acc': ['//gs c gsd acc'], 'warn': ['//gs c gsd warn'], 'macro': ['//gs c gsd macro'], 'accession': ['//gs c gsd sneak', '//gs c gsd invis', '//gs c gsd deo', '//gs c gsd si']}
 
 
 def missing(conf):

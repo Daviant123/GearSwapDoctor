@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 7.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 8.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 7, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 8, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -308,6 +308,7 @@ local HELP = {
     'haste - how much haste you have and what is still missing',
     'acc - your accuracy and Double Attack now, and what they come from',
     'warn - your real hit rate on this monster and the damage taken you are wearing',
+    'sneak / invis / deo / si - that spell on yourself with Accession (si = Sneak then Invisible)', 'macro - put your macro book and page on again',
 }
 function G.command(w)
     local c = low(w[2])
@@ -342,6 +343,14 @@ function G.command(w)
     elseif c == 'haste' then
         local h = G.haste_now()
         if h then say(G.haste_words(h)) else say('haste: nothing to read yet') end
+    elseif c == 'macro' then
+        if on('macro') then G.macro_set() say(('macro book %d, page %d'):format(G.macro_now.book, G.macro_now.page)) else say('the macro book feature is off') end
+    elseif c == 'sneak' or c == 'invis' or c == 'invisible' or c == 'deo' or c == 'deodorize' or c == 'si' then
+        if not on('accession') then say('the Accession feature is off')
+        else
+            local list = (c == 'si' and { 'sneak', 'invisible' }) or { (c == 'invis' and 'invisible') or (c == 'deo' and 'deodorize') or c }
+            G.acc_cast(list)
+        end
     elseif c == 'warn' then
         local rate, n, mob = G.hit_now()
         local ok, pd, md = pcall(G.dt_now)
@@ -434,6 +443,99 @@ function G.solace(spell)
     add_to_chat(167, 'GearSwap Doctor: Afflatus Solace is not on')
 end
 
+-- ------------------------------------------------------------------ Macro book (his request 2026-11-15: "a feature that lets me select a macro book for
+-- the gearswap"): the book and page go on when the file loads and when the sub job changes; a sub job can have its own page.
+function G.macro_set(delay)
+    if not on('macro') then return end
+    local c = cfg.macro
+    local book, page = tonumber(c.book) or 1, tonumber(c.page) or 1
+    local sub = low(player and player.sub_job)
+    for job, n in tostring(c.subs or ''):gmatch('(%a%a%a)%s*=%s*(%d+)') do
+        if job:lower() == sub then page = tonumber(n) or page end
+    end
+    send_command(('wait %s; input /macro book %d; wait 0.6; input /macro set %d'):format(tostring(delay or 0.1), book, page))
+    G.macro_now = { book = book, page = page }
+end
+
+-- ------------------------------------------------------------------ Accession for Sneak, Invisible, Deodorize (his request 2026-11-15: "if the caster
+-- is /sch or main sch that sneak, invisible, deodorize will automatically get accession added to it with the command or sneak, invisible,
+-- deodorize in the party chat"). Normal game commands only: /ja "Accession", then the spell.
+local ACC_SPELLS = { sneak = 'Sneak', invisible = 'Invisible', deodorize = 'Deodorize' }
+
+local function is_sch()
+    return low(player and player.main_job) == 'sch' or low(player and player.sub_job) == 'sch'
+end
+
+-- stratagem charges left (main SCH at 99: 5, one every 48 s; /SCH at 49: 2, one every 120 s), from the game's one shared timer
+local function strat_charges()
+    local main = low(player and player.main_job) == 'sch'
+    local max, per = main and 5 or 2, main and 48 or 120
+    local r = windower.ffxi.get_ability_recasts and windower.ffxi.get_ability_recasts()
+    local left = type(r) == 'table' and tonumber(r[231]) or 0
+    return math.max(0, max - math.ceil(left / per))
+end
+
+-- before the spell: true = it was stopped and sent again behind Accession
+function G.acc_spell(spell)
+    if not on('accession') or not spell or spell.action_type ~= 'Magic' then return false end
+    local name = spell.english
+    if not (name == 'Sneak' or name == 'Invisible' or name == 'Deodorize') or not is_sch() then return false end
+    local c = cfg.accession
+    if (name == 'Sneak' and c.sneak == false) or (name == 'Invisible' and c.invisible == false) or (name == 'Deodorize' and c.deodorize == false) then return false end
+    if buff('Accession') then return false end
+    local now = os.clock()
+    if now < (G.acc_pass or 0) then return false end               -- (the spell we sent again: it goes through, with Accession or without)
+    local light = buff('Light Arts') or buff('Addendum: White')
+    if not light and c.arts == false then return false end
+    if strat_charges() < 1 then
+        if now > (G.acc_none or 0) then G.acc_none = now + 30 say('no stratagem charge for Accession: ' .. name .. ' goes on you alone') end
+        return false
+    end
+    cancel_spell()
+    G.acc_pass = now + 10
+    local target = (spell.target and spell.target.raw) or '<me>'
+    local cmd = ''
+    if not light then cmd = 'input /ja "Light Arts" <me>; wait 1.6; ' end
+    send_command(cmd .. 'input /ja "Accession" <me>; wait 1.6; input /ma "' .. name .. '" ' .. target)
+    return true
+end
+
+-- cast these on yourself one after the other (each gets its Accession on the way through precast)
+function G.acc_cast(list)
+    local parts = {}
+    for i, key in ipairs(list) do
+        local name = ACC_SPELLS[key]
+        if name then
+            if #parts > 0 then parts[#parts + 1] = 'wait 9' end
+            parts[#parts + 1] = 'input /ma "' .. name .. '" <me>'
+        end
+    end
+    if #parts > 0 then G.acc_pass = 0 send_command(table.concat(parts, '; ')) end
+    return #parts > 0
+end
+
+-- "sneak", "invis", "deo" (or "sneak invis", "sneak and invis please") said in the party: which spells
+function G.party_words(msg)
+    local m = ' ' .. low(tostring(msg or '')):gsub('[^%a%s]', ' ') .. ' '
+    if #m > 42 or m:find(' attack') or m:find(' no ') or m:find(' dont ') or m:find(' not ') then return {} end
+    local out = {}
+    if m:find(' sneak ') or m:find(' sneaks ') then out[#out + 1] = 'sneak' end
+    if m:find(' invis ') or m:find(' invisible ') or m:find(' invisi ') then out[#out + 1] = 'invisible' end
+    if m:find(' deo ') or m:find(' deodorize ') or m:find(' deodorise ') or m:find(' deod ') then out[#out + 1] = 'deodorize' end
+    return out
+end
+
+local function acc_chat(message, sender, mode)
+    if not on('accession') or cfg.accession.chat == false or mode ~= 4 or not is_sch() then return end
+    local list = G.party_words(message)
+    if #list == 0 then return end
+    local now = os.clock()
+    if now < (G.acc_chat_t or 0) or (midaction and midaction()) then return end
+    G.acc_chat_t = now + 15
+    say((sender and (tostring(sender) .. ' asked: ') or '') .. table.concat(list, ', ') .. ' with Accession')
+    G.acc_cast(list)
+end
+
 -- what happens before your own precast: Echo Drops when silenced, cancel Sneak for Spectral Jig
 function G.pre(spell)
     if spell.type == 'WeaponSkill' then G.ws_tp = math.floor((player.tp or 0) / 500) * 500 end
@@ -445,6 +547,7 @@ function G.pre(spell)
         say('silenced: using ' .. item)
         return true
     end
+    if G.acc_spell(spell) then return true end
     if on('cancel') and cfg.cancel.jig and spell.english == 'Spectral Jig' and buff('sneak') then
         send_command('cancel 71')
     end
@@ -1350,6 +1453,13 @@ function G.install()
     end
     if on('haste') then windower.raw_register_event('action', on_spell) end
     if on('warn') then windower.raw_register_event('action', function(act) pcall(warn_action, act) end) end
+    if on('accession') and cfg.accession.chat ~= false then
+        windower.raw_register_event('chat message', function(message, sender, mode) pcall(acc_chat, message, sender, mode) end)
+    end
+    if on('macro') then
+        wrap('sub_job_change', nil, function() G.macro_set(1) end)
+        G.macro_set(2)                       -- (after the file's own macro page, if it sets one)
+    end
     if on('acc') then
         windower.raw_register_event('action', function(act) pcall(acc_action, act) end)
         windower.raw_register_event('incoming chunk', acc_chunk)
