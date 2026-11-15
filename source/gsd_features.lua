@@ -1,4 +1,4 @@
---[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 9.
+--[[ GearSwap Doctor features (gsd-features.lua) - written by GearSwap Doctor, version 10.
 
   GearSwap Doctor copies this file to Windower\addons\GearSwap\data. Your choices are not in here: they're in your
   job file, in the "GearSwap Doctor features" block at the end of it (gsd_features = {...}). Change them in
@@ -13,7 +13,7 @@
 ]]
 
 local cfg = gsd_features or {}
-local G = { version = 9, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
+local G = { version = 10, cfg = cfg, orig = {}, tagged = {}, ntagged = 0, moving = false, still = 0, last = nil,
             low_hp = false, low_mp = false, locked = {}, skip = {}, binds = {}, pending = false, t = 0,
             dt = false, rr = false, wlock = false, th_mode = 'Off', th_on = false, ammo_warned = nil }
 gsd = G
@@ -1496,4 +1496,16 @@ local gsd_old_get_sets = rawget(_G, 'get_sets')
 function get_sets()
     if type(gsd_old_get_sets) == 'function' then gsd_old_get_sets() end
     G.install()
+end
+
+-- A Selindrile "<Name>_<Job>_Gear.lua" file is read from INSIDE the job file's get_sets, so the get_sets above is never called again and nothing was
+-- switched on (his report 2026-11-15: "i tried it on all characters, nothing worked at all"). So: a moment after this file is read, switch on if that
+-- hasn't happened yet. By then the job file has finished setting up (its precast, midcast ... exist to run first).
+if type(windower) == 'table' and windower.raw_register_event then
+    local read_at = os.clock()
+    windower.raw_register_event('prerender', function()
+        if G.installed or os.clock() - read_at < 1 then return end
+        local ok, err = pcall(G.install)
+        if not ok then G.installed = true add_to_chat(167, 'GearSwap Doctor: the features could not start: ' .. tostring(err)) end
+    end)
 end
