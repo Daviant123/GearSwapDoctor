@@ -28,7 +28,7 @@ PET_RX = [(k, re.compile(rx, re.I)) for k, rx in [
     ('fast', r'"Fast Cast" ?\+(\d+)'),
 ]]
 # where a pet's part of the text ends
-_ENDS = re.compile(r'(?:\bSet:|Unity Ranking:|Latent effect|Avatar:|Wyvern:|Luopan:|Enchantment:|Reives:|Campaign:|Assault:|Salvage:|Dynamis[^:]{0,20}:|Besieged:|Nighttime:|Daytime:|Dusk[^:]{0,12}:|Dawn[^:]{0,12}:|\bOn [A-Za-z]+:)')
+_ENDS = re.compile(r'(?:Summoned Pet:|Sortie:|Odyssey:|\bSet:|Unity Ranking:|Latent effect|Avatar:|Wyvern:|Luopan:|Enchantment:|Reives:|Campaign:|Assault:|Salvage:|Dynamis[^:]{0,20}:|Besieged:|Nighttime:|Daytime:|Dusk[^:]{0,12}:|Dawn[^:]{0,12}:|\bOn [A-Za-z]+:)')
 # the master's own, for what he and the pet do together
 MASTER_RX = [(k, re.compile(rx)) for k, rx in [('m_da', r'"Double Attack" ?\+(\d+)|"Dbl\. ?Atk\." ?\+(\d+)'), ('m_ta', r'"Triple Attack" ?\+(\d+)'), ('m_stp', r'"Store TP" ?\+(\d+)')]]
 GEAR_HASTE_CAP, TANK_DT = 25, 36
@@ -37,11 +37,11 @@ GEAR_HASTE_CAP, TANK_DT = 25, 36
 def parse(text):
     """{'pet_haste': 5, ...} from an item's text or one augment. What's after "Pet:" or "Automaton:", up to the next heading."""
     out = {}
-    for m in re.finditer(r'(?:Pet|Automaton):', text):
+    for m in re.finditer(r'(?<!Summoned )(?:Pet|Automaton):', text):
         rest = text[m.end():]
         cut = _ENDS.search(rest)
         part = rest[:cut.start()] if cut else rest
-        nxt = re.search(r'(?:Pet|Automaton):', part)              # (several in a row: each once)
+        nxt = re.search(r'(?<!Summoned )(?:Pet|Automaton):', part)              # (several in a row: each once)
         if nxt:
             part = part[:nxt.start()]
         for k, rx in PET_RX:
@@ -57,18 +57,23 @@ def parse(text):
 
 
 # points for each: haste up to its cap, pet damage taken up to what's asked (see above)
-_MELEE = {'haste': 20, 'da': 6, 'ta': 9, 'qa': 12, 'crit': 4, 'stp': 3, 'acc': 0.5, 'att': 0.4, 'lvl': 40, 'str': 0.2, 'dex': 0.2, 'regen': 0.3, 'dt': 1, 'pdt': 1}
+# One automaton level (gear "Automaton: Lv.+1"), researched 2026-11-21 (RESEARCH.md): against a monster 2+ levels above it (Apex / Locus /
+# Ambuscade-type, 120-147; the automaton is 99) each level is about 5 % more physical damage and 2 % more hits (BG Wiki Level Correction), plus
+# about 5 combat skill. 1 % Double Attack is 6 points here, so a fighter's level is about 34 points (= 68 accuracy): worth more than most single
+# stats on a piece. Magic gets only about 4 magic accuracy a level, healing nothing. Odyssey and Sortie have no level correction: there a level is
+# only its skill (about 4 points), so a big-stat piece there beats a "Lv.+1" one.
+_MELEE = {'haste': 20, 'da': 6, 'ta': 9, 'qa': 12, 'crit': 4, 'stp': 3, 'acc': 0.5, 'att': 0.4, 'lvl': 34, 'str': 0.2, 'dex': 0.2, 'regen': 0.3, 'dt': 1, 'pdt': 1}
 FOCUS = {
     'Melee (fights)': _MELEE,
-    'Ranged (Sharpshot)': {'haste': 15, 'da': 3, 'crit': 3, 'stp': 4, 'racc': 0.6, 'ratt': 0.5, 'lvl': 40, 'agi': 0.2, 'dex': 0.2, 'regen': 0.3, 'dt': 1},
-    'Tank': {'dt': 30, 'pdt': 26, 'mdt': 8, 'regen': 8, 'enmity': 5, 'haste': 6, 'hp': 0.05, 'acc': 0.2, 'att': 0.05, 'da': 1, 'lvl': 40, 'vit': 0.2},
-    'Light tank': {'dt': 14, 'pdt': 12, 'mdt': 3, 'haste': 15, 'da': 4, 'ta': 6, 'acc': 0.3, 'att': 0.25, 'enmity': 2, 'regen': 3, 'lvl': 40},
-    'Nuke': {'matk': 3, 'macc': 1, 'int': 0.5, 'refresh': 15, 'fast': 3, 'lvl': 40, 'dt': 1, 'haste': 1},
-    'Magic support': {'macc': 2, 'matk': 1, 'mnd': 0.6, 'int': 0.4, 'refresh': 15, 'fast': 3, 'lvl': 40, 'dt': 1, 'regen': 1, 'haste': 1},
+    'Ranged (Sharpshot)': {'haste': 15, 'da': 3, 'crit': 3, 'stp': 4, 'racc': 0.6, 'ratt': 0.5, 'lvl': 34, 'agi': 0.2, 'dex': 0.2, 'regen': 0.3, 'dt': 1},
+    'Tank': {'dt': 30, 'pdt': 26, 'mdt': 8, 'regen': 8, 'enmity': 5, 'haste': 6, 'hp': 0.05, 'acc': 0.2, 'att': 0.05, 'da': 1, 'lvl': 30, 'vit': 0.2},
+    'Light tank': {'dt': 14, 'pdt': 12, 'mdt': 3, 'haste': 15, 'da': 4, 'ta': 6, 'acc': 0.3, 'att': 0.25, 'enmity': 2, 'regen': 3, 'lvl': 30},
+    'Nuke': {'matk': 3, 'macc': 1, 'int': 0.5, 'refresh': 15, 'fast': 3, 'lvl': 10, 'dt': 1, 'haste': 1},
+    'Magic support': {'macc': 2, 'matk': 1, 'mnd': 0.6, 'int': 0.4, 'refresh': 15, 'fast': 3, 'lvl': 10, 'dt': 1, 'regen': 1, 'haste': 1},
     'Pet enmity': {'enmity': 10, 'dt': 2, 'pdt': 2, 'mdt': 1, 'regen': 1, 'lvl': 10, 'hp': 0.02},
-    'Heal': {'mnd': 1, 'macc': 0.4, 'refresh': 15, 'fast': 5, 'lvl': 40, 'dt': 2, 'regen': 2, 'hp': 0.02, 'haste': 1},
-    'Weapon skill': {'wsd': 12, 'tpb': 0.06, 'att': 0.7, 'ratt': 0.7, 'acc': 0.5, 'racc': 0.4, 'str': 0.5, 'dex': 0.5, 'vit': 0.3, 'lvl': 60, 'crit': 3, 'da': 2},
-    'Magic weapon skill': {'wsd': 10, 'tpb': 0.06, 'matk': 3, 'macc': 1, 'int': 0.5, 'mnd': 0.4, 'lvl': 60},
+    'Heal': {'mnd': 1, 'macc': 0.4, 'refresh': 15, 'fast': 5, 'lvl': 2, 'dt': 2, 'regen': 2, 'hp': 0.02, 'haste': 1},
+    'Weapon skill': {'wsd': 12, 'tpb': 0.06, 'att': 0.7, 'ratt': 0.7, 'acc': 0.5, 'racc': 0.4, 'str': 0.5, 'dex': 0.5, 'vit': 0.3, 'lvl': 45, 'crit': 3, 'da': 2},
+    'Magic weapon skill': {'wsd': 10, 'tpb': 0.06, 'matk': 3, 'macc': 1, 'int': 0.5, 'mnd': 0.4, 'lvl': 10},
     'You and the pet': dict(_MELEE, m_haste=8, m_dt=3, m_da=4, m_ta=6, m_stp=2),
     'You and the pet, accuracy': dict(_MELEE, m_haste=8, m_dt=3, m_da=4, m_ta=6, m_stp=2, acc=2, racc=1),
     'Pet waiting': {'m_dt': 12, 'regen': 8, 'refresh': 8, 'dt': 4, 'pdt': 3, 'hp': 0.03, 'm_refresh': 12},
