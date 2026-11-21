@@ -61,7 +61,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.37.1'
+VERSION = '2.37.2'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -107,6 +107,85 @@ KIND_HELP = {
                 "Usually nothing to do: sets copied from a guide often name gear you don't have. Only matters if you "
                 "plan to get it - until then GearSwap just skips that slot."),
 }
+
+
+def _squash(s):
+    """For searching: no case, spaces, quotes, brackets or dots ('savage' and 'SavageBlade' both find sets.precast.WS["Savage Blade"])."""
+    return re.sub(r'[\s"\'\[\]._:-]', '', (s or '').lower())
+
+
+class SearchCombo(ttk.Combobox):
+    """A drop-down you can type in (his request 2026-11-21: "i want a search feature there, can type and it search what im looking for"):
+    the list shows only what has the typed letters; Enter (or leaving the box) picks the first one that matches."""
+
+    def __init__(self, master=None, **kw):
+        self._all = list(kw.get('values') or [])
+        kw['state'] = 'normal'
+        super().__init__(master, **kw)
+        self._good = ''
+        self.bind('<KeyRelease>', self._typed, add='+')
+        self.bind('<Return>', self._enter, add='+')
+        self.bind('<FocusIn>', self._remember, add='+')
+        self.bind('<FocusOut>', self._leave, add='+')
+
+    def configure(self, cnf=None, **kw):
+        if 'values' in kw:
+            self._all = list(kw['values'] or [])
+        if kw.get('state') == 'readonly':
+            kw['state'] = 'normal'
+        return super().configure(cnf, **kw)
+    config = configure
+
+    def __setitem__(self, key, value):
+        if key == 'values':
+            self._all = list(value or [])
+        super().__setitem__(key, value)
+
+    def set(self, value):
+        super().set(value)
+        if value in self._all:
+            self._good = value
+
+    def matches(self, text):
+        t = _squash(text)
+        return [v for v in self._all if t in _squash(v)] if t else list(self._all)
+
+    def _remember(self, _e=None):
+        if self.get() in self._all:
+            self._good = self.get()
+
+    def _typed(self, e):
+        if e.keysym in ('Return', 'KP_Enter', 'Up', 'Down', 'Escape', 'Tab', 'ISO_Left_Tab'):
+            return
+        super().configure(values=self.matches(self.get()))
+
+    def _pick(self, value):
+        super().configure(values=self._all)
+        self.set(value)
+        self.icursor('end')
+        self.event_generate('<<ComboboxSelected>>')
+
+    def _enter(self, _e=None):
+        text = self.get()
+        if text in self._all:
+            self._pick(text)
+            return 'break'
+        found = self.matches(text)
+        if found:
+            self._pick(found[0])
+        return 'break'
+
+    def _leave(self, _e=None):
+        text = self.get()
+        if text in self._all:
+            super().configure(values=self._all)
+            return
+        found = self.matches(text)
+        if found and text.strip():
+            self._pick(found[0])
+        else:
+            super().configure(values=self._all)
+            super().set(self._good)
 
 
 class ToolTip:
@@ -692,7 +771,7 @@ class App(tk.Tk):
         prm = ttk.Frame(self.job_frame)
         prm.pack(fill='x', pady=(2, 2))
         ttk.Label(prm, text='A set must have:').pack(side='left')
-        self.jp_set = ttk.Combobox(prm, values=[], state='readonly', width=28)
+        self.jp_set = SearchCombo(prm, values=[], width=28)
         self.jp_set.pack(side='left', padx=(4, 8))
         self.jp_set.bind('<<ComboboxSelected>>', lambda e: self._jp_load())
         self.jp_vals = {}
@@ -3706,9 +3785,10 @@ class App(tk.Tk):
         self.sim_file.grid(row=0, column=1, sticky='w', padx=4, pady=2)
         self.sim_file.bind('<<ComboboxSelected>>', lambda e: self.sim_file_changed())
         ttk.Label(inp, text='Set').grid(row=1, column=0, sticky='w')
-        self.sim_set = ttk.Combobox(inp, width=50, state='readonly')
+        self.sim_set = SearchCombo(inp, width=50)          # (type to search)
         self.sim_set.grid(row=1, column=1, columnspan=3, sticky='w', padx=4, pady=2)
         self.sim_set.bind('<<ComboboxSelected>>', lambda e: self.sim_set_changed())
+        ToolTip(self.sim_set, 'Type part of a set name (savage, cross, idle ...) to search; Enter picks the first match.')
         ttk.Label(inp, text='Sub job').grid(row=0, column=2, sticky='w', padx=(16, 0))
         self.sim_sub = ttk.Combobox(inp, values=JOBS, width=6, state='readonly')
         self.sim_sub.set('WAR')
