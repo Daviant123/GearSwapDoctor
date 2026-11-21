@@ -779,7 +779,8 @@ def dt_choices(job, sub, what, owned, cur, tp=1000, enemy='Apex Toad', metric='t
         req = (-float(lv), -float(lv)) if lv else None
         info = {}
         if what == 'tp':
-            best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=spec, ws_damage=wsd)
+            best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=spec, ws_damage=wsd,
+                                           keep_dt=False)
         else:
             best, val, now = W.best_ws_set(job, sub, what, owned, cur, tp=tp, enemy_name=enemy, req=req, info=info, buffs=spec)
         has = info.get('best') or (0, 0)
@@ -902,7 +903,7 @@ def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=
                 continue
             req = W.dt_requirement((targets or {}).get(s['path']))
             key = (tuple(sorted((k, e['Name2']) for k, e in cur.items() if e)), req, spec.get('aftermath'), spec.get('set_haste'),
-                   bool(spec.get('keep_accuracy')))
+                   bool(spec.get('keep_accuracy')), W.dt_named(s['path']))
             if key in done:                                            # (the same gear for the same conditions: the same answer)
                 best, val, now, info, kept = done[key]
                 stats['same'] += 1
@@ -910,7 +911,7 @@ def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=
                 info = {}
                 wsd = tp_ws_damage(loaded, job, sub, cur, owned_ids, items, index, ws_tp, enemy, spec, worth)
                 best, val, now = W.best_tp_set(job, sub, owned, cur, ws_tp=ws_tp, enemy_name=enemy, metric=metric, req=req, info=info,
-                                               buffs=spec, ws_damage=wsd)
+                                               buffs=spec, ws_damage=wsd, path=s['path'])
                 kept = getattr(W.best_tp_set, 'kept_dt', (0, 0))
                 done[key] = (best, val, now, info, kept)
             stats['checked'] += 1
@@ -1008,7 +1009,7 @@ def am_build(loaded, m, job, sub, owned_ids, items, index, buffs=None, ws_tp=100
     info = {}
     wsd = tp_ws_damage(loaded, job, sub, plan['cur'], owned_ids, items, index, ws_tp, enemy, plan['spec'], {})
     best, val, now = W.best_tp_set(job, sub, plan['owned'], plan['cur'], ws_tp=ws_tp, enemy_name=enemy, metric=metric, info=info,
-                                   buffs=plan['spec'], ws_damage=wsd)
+                                   buffs=plan['spec'], ws_damage=wsd, path=m['path'])
     gear = {}
     for key, g in base.items():                                       # (what wsdist doesn't know: as in the set it's made from)
         slot = G.SLOTS.get(key.lower())

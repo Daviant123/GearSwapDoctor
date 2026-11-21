@@ -20,7 +20,7 @@ gsd = G
 
 local function on(k) return type(cfg[k]) == 'table' and cfg[k].on == true end
 local function low(s) return type(s) == 'string' and s:lower() or '' end
-local function say(msg) add_to_chat(207, 'GearSwap Doctor: ' .. msg) end
+local function say(msg) add_to_chat(60, 'GearSwap Doctor: ' .. msg) end
 local function name_of(v) if type(v) == 'table' then return v.name end return v end
 local function has_gear(t) return type(t) == 'table' and next(t) ~= nil end
 local function buff(n) return buffactive and buffactive[n] end
@@ -361,7 +361,7 @@ function G.command(w)
         if ok and a then say(G.acc_words(a)) else say('accuracy: nothing to read yet') end
     else
         say('commands (//gs c gsd ...):')
-        for _, h in ipairs(HELP) do add_to_chat(207, '   ' .. h) end
+        for _, h in ipairs(HELP) do add_to_chat(60, '   ' .. h) end
     end
     G.box_update()
 end
@@ -440,7 +440,7 @@ function G.solace(spell)
     local now = os.time and os.time() or 0
     if now - (G.solace_said or 0) < (cfg.solace.every or 60) then return end
     G.solace_said = now
-    add_to_chat(167, 'GearSwap Doctor: Afflatus Solace is not on')
+    add_to_chat(28, 'GearSwap Doctor: Afflatus Solace is not on')
 end
 
 -- ------------------------------------------------------------------ Macro book (his request 2026-11-15: "a feature that lets me select a macro book for
@@ -585,7 +585,7 @@ function G.ammo(spell)
     end
     if n <= (cfg.ammo.count or 20) and G.ammo_warned ~= n and (n % 5 == 0 or n <= 5) then
         G.ammo_warned = n
-        add_to_chat(167, 'GearSwap Doctor: ' .. a .. ' - only ' .. n .. ' left!')
+        add_to_chat(28, 'GearSwap Doctor: ' .. a .. ' - only ' .. n .. ' left!')
     end
 end
 
@@ -715,7 +715,7 @@ function G.haste_tick(status)
     if key == G.haste_told then return end
     if key ~= G.haste_maybe then G.haste_maybe = key return end
     G.haste_told = key
-    if tell ~= 'Never' then add_to_chat(h.capped and 158 or 207, 'GearSwap Doctor: ' .. G.haste_words(h)) end
+    if tell ~= 'Never' then add_to_chat(h.capped and 56 or 60, 'GearSwap Doctor: ' .. G.haste_words(h)) end
     G.box_update()
 end
 
@@ -915,7 +915,7 @@ function G.acc_tick(status)
         if key ~= G.acc_maybe then G.acc_maybe = key
         else
             G.acc_told = key
-            if (cfg.acc.tell or 'When it changes') ~= 'Never' then add_to_chat(207, 'GearSwap Doctor: ' .. G.acc_words(a)) end
+            if (cfg.acc.tell or 'When it changes') ~= 'Never' then add_to_chat(60, 'GearSwap Doctor: ' .. G.acc_words(a)) end
         end
     end
     G.box_update()
@@ -1054,7 +1054,7 @@ local function warn_say(key, msg)
     G.warn_told = G.warn_told or {}
     if (G.warn_told[key] or -999) + (cfg.warn.again or 60) > now then return end
     G.warn_told[key] = now
-    add_to_chat(167, 'GearSwap Doctor: ' .. msg)
+    add_to_chat(28, 'GearSwap Doctor: ' .. msg)
 end
 
 -- every 2 s: the window line and the warnings
@@ -1256,7 +1256,7 @@ local function tools_say(key, msg)
     local now = os.clock()
     if now - (G.tool_said[key] or -100) < 60 then return end
     G.tool_said[key] = now
-    add_to_chat(167, 'GearSwap Doctor: ' .. msg)
+    add_to_chat(28, 'GearSwap Doctor: ' .. msg)
 end
 
 -- open a bag for this spell now, if it needs one (false: nothing done)
@@ -1506,6 +1506,6 @@ if type(windower) == 'table' and windower.raw_register_event then
     windower.raw_register_event('prerender', function()
         if G.installed or os.clock() - read_at < 1 then return end
         local ok, err = pcall(G.install)
-        if not ok then G.installed = true add_to_chat(167, 'GearSwap Doctor: the features could not start: ' .. tostring(err)) end
+        if not ok then G.installed = true add_to_chat(28, 'GearSwap Doctor: the features could not start: ' .. tostring(err)) end
     end)
 end

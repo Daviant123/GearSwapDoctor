@@ -63,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.39.0'
+VERSION = '2.39.1'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -4982,6 +4982,7 @@ class App(tk.Tk):
         self._sim_slots_changed()
 
     def simulate(self, find_best):
+        self._sim_rescore = None                         # (a pick is scored again only for the wsdist result it was made in)
         if self.sim_set.get() and pld.takes(self.sim_set.get(), checks.job_of(self.sim_file.get() or '')):
             self._sim_pet(find_best, mod=pld)
             return
@@ -5060,7 +5061,8 @@ class App(tk.Tk):
                 best_gear = None
                 if what == 'tp':
                     if find_best:
-                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=spec, ws_damage=wsd)
+                        best, dmg, now = W.best_tp_set(job, sub, owned, cur, ws_tp=tp, enemy_name=enemy, metric=metric, req=req, info=info, buffs=spec, ws_damage=wsd,
+                                                       path=set_path)
                     else:
                         now, dmg = W.tp_set_value(job, sub, cur, ws_tp=tp, enemy_name=enemy, metric=metric, info=info, buffs=spec, ws_damage=wsd), None
                 elif find_best:
@@ -5069,6 +5071,9 @@ class App(tk.Tk):
                     now, dmg = W.set_damage(job, sub, what, cur, tp=tp, enemy_name=enemy, info=info, buffs=spec), None
                 if dmg is not None:
                     best_gear = {W.GS_SLOT[s_]: doctor._gs_name(e, items) for s_, e in best.items() if e and e['Name'] != 'Empty'}
+                self._sim_rescore = ({'job': job, 'sub': sub, 'what': what, 'tp': tp, 'enemy': enemy, 'metric': metric, 'spec': spec, 'wsd': wsd,
+                                      'best': dict(best), 'owned': owned, 'items': items, 'index': index, 'value': dmg, 'picked': {}}
+                                     if dmg is not None else None)
                 info['asked'] = req
                 self.after(0, lambda: self._sim_done(path, set_path, what, now, dmg, now_gear, best_gear, notes, tp, enemy, info, metric))
             except Exception as e:
@@ -5410,13 +5415,14 @@ class App(tk.Tk):
         return [it['en'] for it in owned][:30]
 
     def _sim_offer(self, path, now_gear, best_gear, kept, keep_w):
-        """Dropdowns in the best set's slots that are empty or kept (wsdist couldn't judge them): his own gear to pick from."""
+        """A dropdown in every slot of the best set but the weapons (his request 2026-11-21: "always have the option of the dropdown to select gear,
+        just like the ammo"): his own gear to pick from, wsdist's pick shown first. A pick is scored again (_sim_picked)."""
         if best_gear is None:
             return
         job = checks.job_of(os.path.basename(path)) or ''
         for row in GRID:
             for slot in row:
-                if slot in keep_w or slot == 'range' or (slot in best_gear and slot not in kept):
+                if slot in keep_w or slot == 'range':
                     continue
                 choices = self.slot_choices(slot, job)
                 cur = best_gear.get(slot, '')
@@ -5441,8 +5447,54 @@ class App(tk.Tk):
         else:
             changes.pop(slot, None)
         self.sim_best = (path, set_path, changes) if changes else None
-        self._sim_tips_best[slot] = '(your pick - not in the numbers)'
+        self._sim_tips_best[slot] = '(your pick)'
         self._sim_slots_changed()
+        self._sim_rescore_pick(slot, name)
+
+    def _sim_rescore_pick(self, slot, name):
+        """wsdist scores the best set again with his picks in it: "With your picks: ..." under the result. An item wsdist doesn't know can't be
+        scored (said so in the slot)."""
+        ctx = getattr(self, '_sim_rescore', None)
+        if not ctx:
+            return
+        import wsdist_runner as W
+        ws_slot = W.SLOT_MAP.get(slot)
+        items = ctx['items']
+        entry = None
+        for e in ctx['owned'].get(ws_slot, []):
+            if name.lower() in (e['Name'].lower(), doctor._gs_name(e, items).lower()):
+                entry = e
+                break
+        if entry is None:
+            ents = W.entries_for(name, items, ctx['index'])
+            entry = W.pick_variant(ents, W._bag_augs(name, items)) if ents else None
+        if entry is None:
+            self._sim_tips_best[slot] = "(your pick - wsdist doesn't know it, not in the numbers)"
+            self._sim_slots_changed()
+            return
+        ctx['picked'][ws_slot] = entry
+        gear = dict(ctx['best'], **ctx['picked'])
+        base = self.sim_result.cget('text').split('\nWith your picks')[0]
+
+        def work():
+            try:
+                if ctx['what'] == 'tp':
+                    v = W.tp_set_value(ctx['job'], ctx['sub'], gear, ws_tp=ctx['tp'], enemy_name=ctx['enemy'], metric=ctx['metric'], buffs=ctx['spec'],
+                                       ws_damage=ctx['wsd'])
+                else:
+                    v = W.set_damage(ctx['job'], ctx['sub'], ctx['what'], gear, tp=ctx['tp'], enemy_name=ctx['enemy'], buffs=ctx['spec'])
+            except Exception as e:
+                self.after(0, lambda e=e: self.sim_result.config(text=base + f'\nWith your picks: wsdist could not score it ({e})'))
+                return
+            b = ctx['value'] or 0
+            worse = (v > b) if (ctx['what'] == 'tp' and ctx['metric'] == 'time') else (v < b)
+            pct = abs(v - b) / b * 100 if b else 0
+            unit = {'time': ' s to a WS', 'dps': ' damage a second'}.get(ctx['metric'], ' per round') if ctx['what'] == 'tp' else ' damage'
+            word = 'the same as' if pct < 0.05 else (f'{pct:.1f} % worse than' if worse else f'{pct:.1f} % better than')
+            line = f"\nWith your picks: {v:,.2f}{unit} - {word} wsdist's best" if ctx['what'] == 'tp' else \
+                   f"\nWith your picks: {v:,.0f}{unit} - {word} wsdist's best"
+            self.after(0, lambda: self.sim_result.config(text=base + line))
+        threading.Thread(target=work, daemon=True).start()
 
     def _real_lines(self, what, tpset, tp, enemy, now, now_gear):
         """His real fights beside wsdist's number, when the feature has recorded any."""

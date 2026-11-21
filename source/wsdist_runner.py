@@ -486,12 +486,26 @@ def _tp_value(out, metric):
     return out[0] if metric in ('time', 'dps') else out[1][0]
 
 
-def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None, buffs=None, ws_damage=None):
+DT_WORDS = ('dt', 'pdt', 'mdt', 'hybrid', 'tank', 'meva', 'mdef', 'defense', 'def', 'safe', 'turtle', 'emergency', 'emergencydt', 'dtlite', 'hybriddt')
+
+
+def dt_named(path):
+    """A set whose name says it is for damage taken (sets.engaged.DT, sets.TP.Hybrid, sets.engaged.Acc.PDT ...)."""
+    if not path:
+        return False
+    parts = [p.strip('"\'[] ').lower() for p in re.split(r'[.\[\]]', path) if p]
+    return any(p in DT_WORDS or re.fullmatch(r'(?:melee|hybrid|light|lite|full|max|mid|acc|tp|engaged)?[pm]?dt\d*(?:lite)?', p) for p in parts[1:])
+
+
+def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', metric='time', ml=20, req=None, info=None, buffs=None, ws_damage=None,
+                path=None, keep_dt=None):
     """The best TP (engaged) set from the owned gear (wsdist's "attack round" - Melee TP set). metric 'time': the
     seconds of auto-attacks from 0 TP to ws_tp (lower is better); 'damage': damage per attack round. Returns (best
     {slot: entry}, best value, current value). req: (PDT, MDT) the new set must reach (his numbers, dt_requirement);
-    None = at least what the set has now. info (a dict) gets the damage taken: now / best / asked. buffs: what's up
-    (buff_spec), none when left out."""
+    None = at least what the set has now - but only for a set whose name says it is for damage taken (dt_named(path), or keep_dt=True): his
+    question 2026-11-21, "how is defending ring better than all other options for blu tp, there are no limits of dt": a plain TP set
+    (sets.TP.Standard) is built for damage alone. keep_dt=None with no path: kept, as before. info (a dict) gets the damage taken: now / best /
+    asked. buffs: what's up (buff_spec), none when left out."""
     mods = _wsdist()
     cp, ws_mod, act = mods['create_player'], mods['wsdist'], mods['actions']
     stats, debuffs, aftermath = buff_stats(buffs)
@@ -523,7 +537,8 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
             # keep the set's damage taken: a TP.DT set made "faster" by dropping its DT gear would be no use - the new
             # set must have at least the physical / magic DT the set has now (wsdist's PDT / MDT requirement)
             pdt, mdt = dt_of(player0)
-            req_p, req_m = req if req else (min(0, pdt), min(0, mdt))
+            keep = keep_dt if keep_dt is not None else (dt_named(path) if path else True)
+            req_p, req_m = req if req else ((min(0, pdt), min(0, mdt)) if keep else (0, 0))
             first = start
             if req:
                 first, (req_p, req_m) = dt_start(cp, job, sub, ml, start, check, req, abilities, stats)
@@ -540,7 +555,7 @@ def best_tp_set(job, sub, owned, current, ws_tp=1000, enemy_name='Apex Toad', me
                                 act.average_attack_round(best, enemy, 0, ws_tp, 'Time to WS')[0])
     finally:
         os.chdir(cwd)
-    best_tp_set.kept_dt = (req_p, req_m) if not req else req
+    best_tp_set.kept_dt = ((req_p, req_m) if keep else (0, 0)) if not req else req
     if info is not None:
         info.update({'now': (pdt, mdt), 'best': dt_best, 'asked': req, 'kept': not req})
     return best.gearset, _tp_value(after, metric), _tp_value(now, metric)
