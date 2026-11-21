@@ -349,8 +349,15 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
         dtf = _dt_fields(info, req)
         dt_fix = bool(req) and not kept and not dtf.get('dt_was_met') and changes      # his damage taken, even if it costs damage (not the tank's own: only a gain)
         if changes and (gain >= 1 or dt_fix):
+            slot_gain = {}                     # (what each changed slot alone adds: shown beside the change before it is written, his request 2026-11-21)
+            for wslot, gs in W.GS_SLOT.items():
+                if gs in changes:
+                    try:
+                        slot_gain[gs] = round(W.set_damage(job, sub, ws, dict(cur, **{wslot: best[wslot]}), tp=tp, enemy_name=enemy, buffs=plan['spec']) - now)
+                    except Exception:
+                        pass
             out.append(dict({'set': s['path'], 'ws': ws, 'now': round(now), 'best': round(dmg), 'gain': round(gain, 1),
-                             'changes': changes, 'notes': notes, 'dt_fix': bool(dt_fix)}, **dtf))
+                             'changes': changes, 'notes': notes, 'dt_fix': bool(dt_fix), 'slot_gain': slot_gain}, **dtf))
     return out
 
 
@@ -1129,6 +1136,15 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
                 order = {}
             if order:
                 entry['hp_order'] = order
+        if not loaded.error:                  # (a set GearSwap never uses: its name isn't the real spell / ability / weapon skill - his "SavageBlade")
+            import job_guides
+            try:
+                for old, new, wrong, real_ in job_guides.name_fixes(loaded):
+                    entry['problems'].append({'kind': 'setname', 'item': wrong, 'slot': '', 'sets': [old], 'fix': real_,
+                                              'edit': job_guides.rename_edits([(old, new, wrong, real_)])[0],
+                                              'detail': f'is not a real name, so GearSwap never uses this set. Rename: {new[5:]}'})
+            except Exception:
+                pass
         for p in job_rules.ammo_problems(loaded, items, job, owned_ids):
             entry['problems'].append({'kind': 'ammo', 'item': p['item'], 'slot': 'ammo', 'sets': p['sets'], 'fix': p['fix'],
                                       'detail': f"Not a bullet: it takes your gun off. Put back: {p['fix'] or 'a bullet'}"})

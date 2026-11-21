@@ -215,7 +215,7 @@ def check(loaded, items, bags, job=None):
                 elif not (locs & EQUIP_BAGS):
                     add('stored', name, slot, s['path'], 'is in ' + ', '.join(sorted(locs)) +
                         " - GearSwap can only equip from the inventory or a Mog Wardrobe")
-    order = {'broken': 0, 'unknown': 1, 'slot': 2, 'job': 3, 'missing': 4, 'stored': 5}
+    order = {'broken': 0, 'unknown': 1, 'slot': 2, 'job': 3, 'missing': 4, 'stored': 5}   # ('setname' / 'ammo': doctor.py adds them)
     return sorted(problems.values(), key=lambda p: (order[p['kind']], p['item'].lower()))
 
 

@@ -42,6 +42,7 @@ import shop  # noqa: E402
 import cleanup  # noqa: E402
 import gsd_enemies  # noqa: E402
 import job_guides  # noqa: E402
+import ws_all   # noqa: E402
 import pup      # noqa: E402
 import real     # noqa: E402
 import real_fights  # noqa: E402
@@ -61,14 +62,14 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.37.2'
+VERSION = '2.38.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
 KIND_TEXT = {'broken': 'Broken', 'unknown': 'Misspelled', 'slot': 'Wrong slot', 'job': 'Wrong job',
-             'missing': 'Not owned', 'stored': 'In storage', 'ammo': 'Takes your gun off'}
+             'missing': 'Not owned', 'stored': 'In storage', 'ammo': 'Takes your gun off', 'setname': 'Set never used'}
 KIND_COLOR = {'broken': '#f4b4b4', 'unknown': '#f4b4b4', 'slot': '#f7d79a', 'job': '#f7d79a', 'missing': '#d9d9f7',
-              'stored': '#d9e9f7', 'ammo': '#f4b4b4'}
+              'stored': '#d9e9f7', 'ammo': '#f4b4b4', 'setname': '#f4b4b4'}
 GRID = [['main', 'sub', 'range', 'ammo'], ['head', 'neck', 'ear1', 'ear2'], ['body', 'hands', 'ring1', 'ring2'],
         ['back', 'waist', 'legs', 'feet']]
 SLOT_TEXT = {'main': 'Main', 'sub': 'Sub', 'range': 'Range', 'ammo': 'Ammo', 'head': 'Head', 'neck': 'Neck', 'ear1': 'Ear 1',
@@ -83,11 +84,14 @@ WPN_AUTO = '(as in the file)'
 
 # How much each kind matters, and what it means / what to do, in plain words (his request 2026-10-30: "gearswap doctor
 # gui is not very user friendly and hard to understand. add in more things to help the user make decisions")
-KIND_LEVEL = {'broken': 'must', 'unknown': 'must', 'slot': 'should', 'job': 'should', 'stored': 'should', 'missing': 'info', 'ammo': 'must'}
+KIND_LEVEL = {'broken': 'must', 'unknown': 'must', 'slot': 'should', 'job': 'should', 'stored': 'should', 'missing': 'info', 'ammo': 'must', 'setname': 'must'}
 LEVEL_TEXT = {'must': 'Must fix', 'should': 'Should fix', 'info': 'Just so you know'}
 LEVEL_COLOR = {'must': '#d9534f', 'should': '#e0a030', 'info': '#9a9a9a', 'good': '#4caf50'}
 LEVEL_RANK = {'must': 0, 'should': 1, 'info': 2}
 KIND_HELP = {
+    'setname': ("GearSwap finds a weapon skill, ability or spell set only by its exact name (sets.precast.WS[\"Savage Blade\"]). A name run "
+                "together or misspelled (SavageBlade, Weapn Bash) is never used: the general set goes on instead.",
+                'Tick it and click Apply ticked: the set gets its real name, everywhere the file names it (a backup is made first).'),
     'ammo': ("A COR or RNG with ammo that isn't a bullet or arrow loses the gun or bow every time that set goes on.",
              'Ammo that is not a bullet or arrow: your gun comes off when this set goes on. Tick it to put a bullet back.'),
     'broken': ("This set or file doesn't work. GearSwap stops reading the file there, or the set is used before it's made, "
@@ -139,6 +143,8 @@ class SearchCombo(ttk.Combobox):
     def __setitem__(self, key, value):
         if key == 'values':
             self._all = list(value or [])
+        if key == 'state' and value == 'readonly':
+            value = 'normal'
         super().__setitem__(key, value)
 
     def set(self, value):
@@ -458,7 +464,7 @@ class GearGrid(ttk.LabelFrame):
         """A dropdown in a slot (his request 2026-11-07: every slot filled - where wsdist has nothing, suggestions to pick
         from). on_pick(slot, name) when he picks one."""
         f, cap, body = self.cells[slot]
-        cb = ttk.Combobox(f, values=choices, state='readonly', font=('Segoe UI', 8))
+        cb = SearchCombo(f, values=choices, state='readonly', font=('Segoe UI', 8))
         cb.set(current)
         cb.bind('<<ComboboxSelected>>', lambda e: on_pick(slot, cb.get()))
         cb.place(x=2, y=16, relwidth=1, width=-6)
@@ -522,7 +528,7 @@ class App(tk.Tk):
         top.pack(fill='x')
         ttk.Label(top, text='Character').pack(side='left')
         self.who = tk.StringVar(value=self.cfg.get('character') if self.cfg.get('character') in self.chars else self.chars[0])
-        cb = ttk.Combobox(top, textvariable=self.who, values=self.chars, state='readonly', width=16)
+        cb = SearchCombo(top, textvariable=self.who, values=self.chars, state='readonly', width=16)
         cb.pack(side='left', padx=6)
         cb.bind('<<ComboboxSelected>>', lambda e: self.change_character())
         self.who_box = cb
@@ -694,7 +700,7 @@ class App(tk.Tk):
         self.all_btn.pack(side='right')
         ToolTip(self.all_btn, 'Fixes every misspelled name and applies every ticked upgrade in all jobs. You see the full list of '
                               'changes first; every file is backed up.')
-        self.start_job = ttk.Combobox(head, values=['All jobs'], state='readonly', width=12)   # (set by the job list)
+        self.start_job = SearchCombo(head, values=['All jobs'], state='readonly', width=12)   # (set by the job list)
         self.start_job.set('All jobs')
         self.start_sub = ttk.Label(self.all_frame, text='', foreground='#555', wraplength=900, justify='left')
         self.start_sub.pack(anchor='w', pady=(2, 8))
@@ -845,6 +851,8 @@ class App(tk.Tk):
                 for p in f['problems']:
                     if p['kind'] == 'unknown' and p.get('fix'):
                         self.job_ticks.add(('r', f['path'], p['item']))
+                    if p['kind'] == 'setname' and p.get('edit'):
+                        self.job_ticks.add(('n', f['path'], p['item']))
                 for u in f['upgrades']:
                     if 'error' not in u and (5 <= u['gain'] <= 100 or u.get('dt_fix')):
                         self.job_ticks.add(('u', f['path'], u['set']))
@@ -899,6 +907,11 @@ class App(tk.Tk):
                     key = ('r', f['path'], p['item'])
                     row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}", values=(p['fix'], len(p['sets'])))
                     self.job_rowkey[('fix', row)] = (key, (f['path'], ('rename', p['item'], p['fix'])))
+                    n_fix += 1
+                elif p['kind'] == 'setname' and p.get('edit'):
+                    key = ('n', f['path'], p['item'])
+                    row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} set {p['item']}: never used", values=(p['fix'], len(p['sets'])))
+                    self.job_rowkey[('fix', row)] = (key, (f['path'], tuple(p['edit'])))
                     n_fix += 1
                 elif p['kind'] == 'ammo' and p.get('fix'):
                     key = ('a', f['path'], p['item'])
@@ -1117,6 +1130,8 @@ class App(tk.Tk):
                 for p in f['problems']:
                     if p['kind'] == 'unknown' and p.get('fix') and ('r', f['path'], p['item']) in self.job_ticks:
                         by_file.setdefault(f['path'], []).append(('rename', p['item'], p['fix']))
+                    if p['kind'] == 'setname' and p.get('edit') and ('n', f['path'], p['item']) in self.job_ticks:
+                        by_file.setdefault(f['path'], []).append(tuple(p['edit']))
                     if p['kind'] == 'ammo' and p.get('fix') and ('a', f['path'], p['item']) in self.job_ticks:
                         by_file.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}, job_rules.AMMO_FIX) for s in p['sets'])
             if part in (None, 'up'):
@@ -1217,6 +1232,16 @@ class App(tk.Tk):
                 self._apply({f['path']: [('priority', sp, pr) for sp, pr in o.items()] for f, o in found})
             n_sets = sum(len(o) for f, o in order)
             self._card('should', f"{n_sets} Paladin set(s) can lose HP as they go on", HP_ORDER_HELP, [('Put HP gear on first', fix_order)])
+        names_ = [(f, p) for f, p in by.get('setname', []) if p.get('edit')]
+        if names_:
+            def fix_names(found=names_):
+                by_f = {}
+                for f, p in found:
+                    by_f.setdefault(f['path'], []).append(tuple(p['edit']))
+                self._apply(by_f)
+            ex = ', '.join(f"{p['item']} -> {p['fix']}" for f, p in names_[:3])
+            self._card('must', f"{len(names_)} set name(s) GearSwap never uses", KIND_HELP['setname'][0] + f' For example: {ex}.',
+                       [('Fix the set names', fix_names), ('Show me', lambda: self.show_problems('setname'))])
         fixable = [(f, p) for f, p in by.get('unknown', []) if p.get('fix')]
         if by.get('unknown'):
             ex = ', '.join(f"{p['item']} -> {p['fix']}" for f, p in fixable[:3])
@@ -1308,7 +1333,7 @@ class App(tk.Tk):
         top = ttk.Frame(tab)
         top.pack(fill='x')
         ttk.Label(top, text='GearSwap file').pack(side='left')
-        self.feat_file = ttk.Combobox(top, state='readonly', width=34)
+        self.feat_file = SearchCombo(top, state='readonly', width=34)
         self.feat_file.pack(side='left', padx=6)
         self.feat_file.bind('<<ComboboxSelected>>', lambda e: self.feat_load())
         self.feat_style = ttk.Label(top, text='', foreground='#555')
@@ -1561,7 +1586,7 @@ class App(tk.Tk):
                     if cur not in vals:
                         vals.append(cur)
                     ttk.Label(box, text='    ' + SLOT_TEXT.get(slot, slot)).grid(row=row, column=0, sticky='w')
-                    cb = ttk.Combobox(box, values=vals, state='readonly', width=30)
+                    cb = SearchCombo(box, values=vals, state='readonly', width=30)
                     cb.set(cur)
                     cb.grid(row=row, column=1, sticky='w', pady=1)
                     cb.bind('<<ComboboxSelected>>', lambda e, s_=slot, c=cb, k_=k: self._feat_gear(key, k_, s_, c.get()))
@@ -1585,7 +1610,7 @@ class App(tk.Tk):
                 cur = str(cur) if cur not in (None, '') else '(none)'
                 if cur not in vals:
                     vals = vals + [cur]
-                cb = ttk.Combobox(box, values=vals, state='readonly', width=30)
+                cb = SearchCombo(box, values=vals, state='readonly', width=30)
                 cb.set(cur)
                 cb.grid(row=row, column=1, sticky='w')
                 cb.bind('<<ComboboxSelected>>', lambda e, k_=k, c=cb, t_=typ: self._feat_set(key, k_, '' if c.get() == '(none)'
@@ -1630,7 +1655,7 @@ class App(tk.Tk):
             self.feat_am_text.grid(row=row + 1, column=0, columnspan=2, sticky='w')
             ult = sorted({it['en'] for it in owned if features.fits(it, 'main') and rema.family(it['en']) not in (None, 'Aeonic')})
             ttk.Label(box, text='A set for no weapon in particular: judge it with').grid(row=row + 2, column=0, sticky='w', pady=(4, 0))
-            self.feat_am_weapon = ttk.Combobox(box, values=['(your file decides)'] + ult, state='readonly', width=30)
+            self.feat_am_weapon = SearchCombo(box, values=['(your file decides)'] + ult, state='readonly', width=30)
             self.feat_am_weapon.set('(your file decides)')
             self.feat_am_weapon.grid(row=row + 2, column=1, sticky='w', pady=(4, 0))
             self.feat_am_btn = ttk.Button(box, text='Make the missing Aftermath sets from my gear...', command=self.feat_am_make)
@@ -1810,11 +1835,11 @@ class App(tk.Tk):
         bar = ttk.Frame(tab)
         bar.pack(fill='x', pady=(0, 6))
         ttk.Label(bar, text='Job').pack(side='left')
-        self.prog_job = ttk.Combobox(bar, values=JOBS, state='readonly', width=6)
+        self.prog_job = SearchCombo(bar, values=JOBS, state='readonly', width=6)
         self.prog_job.pack(side='left', padx=4)
         self.prog_job.bind('<<ComboboxSelected>>', lambda e: self.prog_load())
         ttk.Label(bar, text='Show').pack(side='left', padx=(10, 0))
-        self.prog_view = ttk.Combobox(bar, state='readonly', width=30,
+        self.prog_view = SearchCombo(bar, state='readonly', width=30,
                                       values=['Everything for this job', 'What to do next (this job)', 'My goals (all jobs)'])
         self.prog_view.set('Everything for this job')
         self.prog_view.pack(side='left', padx=4)
@@ -2002,11 +2027,11 @@ class App(tk.Tk):
         bar = ttk.Frame(tab)
         bar.pack(fill='x')
         ttk.Label(bar, text='File').pack(side='left')
-        self.opt_file = ttk.Combobox(bar, state='readonly', width=26)
+        self.opt_file = SearchCombo(bar, state='readonly', width=26)
         self.opt_file.pack(side='left', padx=4)
         self.opt_file.bind('<<ComboboxSelected>>', lambda e: self.opt_load())
         ttk.Label(bar, text='Sub job').pack(side='left', padx=(8, 0))
-        self.opt_sub = ttk.Combobox(bar, values=JOBS, state='readonly', width=5)
+        self.opt_sub = SearchCombo(bar, values=JOBS, state='readonly', width=5)
         self.opt_sub.pack(side='left', padx=4)
         self.opt_sub.bind('<<ComboboxSelected>>', lambda e: self.opt_load(keep_sub=True))
         self.opt_cap = tk.BooleanVar(value=bool(self.cfg.get('opt_cap_dt', False)))
@@ -2033,17 +2058,21 @@ class App(tk.Tk):
                     "taken II, Priwen's and Sakpata's Sword's Phalanx ...) and the rest of each set is built around them. They are never written "
                     "into the sets: your weapon sets / keys still choose what you hold. \"Each set's own\": every set as it is in the file.")
         ttk.Label(wb, text='your weapon set').pack(side='left', padx=(8, 0))
-        self.opt_wset = ttk.Combobox(wb, state='readonly', width=20)
+        self.opt_wset = SearchCombo(wb, state='readonly', width=20)
         self.opt_wset.pack(side='left', padx=4)
         self.opt_wset.bind('<<ComboboxSelected>>', lambda e: self._opt_wset_picked())
         ttk.Label(wb, text='or Weapon').pack(side='left', padx=(8, 0))
-        self.opt_main = ttk.Combobox(wb, state='readonly', width=24)
+        self.opt_main = SearchCombo(wb, state='readonly', width=24)
         self.opt_main.pack(side='left', padx=4)
         self.opt_main.bind('<<ComboboxSelected>>', lambda e: self._opt_weapons_changed())
         ttk.Label(wb, text='Shield').pack(side='left', padx=(8, 0))
-        self.opt_shield = ttk.Combobox(wb, state='readonly', width=22)
+        self.opt_shield = SearchCombo(wb, state='readonly', width=22)
         self.opt_shield.pack(side='left', padx=4)
         self.opt_shield.bind('<<ComboboxSelected>>', lambda e: self._opt_weapons_changed())
+        b_all = ttk.Button(wb, text='Every weapon skill for a weapon...', command=self.ws_all_open)
+        b_all.pack(side='left', padx=(10, 0))
+        ToolTip(b_all, "Builds a weapon skill set for each of a weapon's weapon skills at once (wsdist, your own gear), shows each one's damage now and "
+                       "after with what every changed slot adds, and writes the ones you tick (backup first).")
         self.opt_wnote = ttk.Label(wb, text='', foreground='#b36b00')
         self.opt_wnote.pack(side='left', padx=8)
 
@@ -2091,7 +2120,7 @@ class App(tk.Tk):
         fr = ttk.Frame(one)
         fr.pack(fill='x', pady=(4, 2))
         ttk.Label(fr, text='It is for').pack(side='left')
-        self.opt_focus = ttk.Combobox(fr, state='disabled', width=28)
+        self.opt_focus = SearchCombo(fr, state='disabled', width=28)
         self.opt_focus.pack(side='left', padx=4)
         self.opt_focus.bind('<<ComboboxSelected>>', lambda e: self._opt_focus_changed())
         ToolTip(self.opt_focus, 'What the Doctor thinks this set is for, from its name. Pick another and it is judged again (remembered for this set).')
@@ -2295,6 +2324,177 @@ class App(tk.Tk):
         self.opt_shield.set(s_ or gear_opt.EACH)
         lost = [x['name'] for x, k in ((g.get('main'), m), (g.get('sub'), s_)) if x and not k]
         self._opt_weapons_changed(keep_set=True, lost=lost)
+
+    # ------------------------------------------------------------------ every weapon skill for one weapon (his request 2026-11-21)
+    def ws_all_open(self):
+        """A window: the weapon's weapon skills (ticked: the ones for his job, and the ones his file has), Build (wsdist, his own gear), each one's
+        damage now and after with what every changed slot adds, then Write ticked (the usual confirm list and backup)."""
+        if not self.ws_ready:
+            messagebox.showinfo('GearSwap Doctor', 'wsdist is still loading - try again in a moment.')
+            return
+        path = getattr(self, '_opt_path', None)
+        if not path:
+            messagebox.showinfo('GearSwap Doctor', 'Pick a GearSwap file first.')
+            return
+        job, who = self._opt_job(), self.who.get()
+        sub = self.opt_sub.get() or 'WAR'
+        mains = [k for k in getattr(self, '_opt_mains', {}) if k != gear_opt.EACH]
+        offs = [k for k in getattr(self, '_opt_subs', {}) if k != gear_opt.EACH]
+        w = tk.Toplevel(self)
+        w.title('Every weapon skill for one weapon')
+        w.geometry('860x560')
+        w.transient(self)
+        top = ttk.Frame(w, padding=8)
+        top.pack(fill='x')
+        ttk.Label(top, text=f'{os.path.basename(path)}  ({job}/{sub})   Weapon').pack(side='left')
+        wpn = SearchCombo(top, values=mains, width=26)
+        wpn.pack(side='left', padx=4)
+        pick = self.opt_main.get()
+        wpn.set(pick if pick in mains else (mains[0] if mains else ''))
+        ttk.Label(top, text='Off hand').pack(side='left', padx=(8, 0))
+        off = SearchCombo(top, values=['(nothing)'] + offs, width=22)
+        off.pack(side='left', padx=4)
+        sh = self.opt_shield.get()
+        off.set(sh if sh in offs else '(nothing)')
+        status = ttk.Label(w, text='Tick the weapon skills to build, then Build. Nothing is written until you press Write ticked.', foreground='#555')
+        status.pack(anchor='w', padx=10)
+        frame = ttk.Frame(w)
+        frame.pack(fill='both', expand=True, padx=10, pady=4)
+        t = ttk.Treeview(frame, columns=('set', 'result'), show='tree headings')
+        for c, h, wd in (('#0', 'Weapon skill / slot', 250), ('set', 'In your file / item', 330), ('result', 'Damage', 220)):
+            t.heading(c, text=h)
+            t.column(c, width=wd, anchor='w')
+        sb = ttk.Scrollbar(frame, orient='vertical', command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        st = {'ticks': set(), 'rows': {}, 'results': [], 'ld': None, 'busy': False}
+
+        def weapon_name(label):
+            c = self._opt_mains.get(label) if label in getattr(self, '_opt_mains', {}) else None
+            return c['name'] if c else label
+
+        def off_name(label):
+            c = self._opt_subs.get(label) if label in getattr(self, '_opt_subs', {}) else None
+            return c['name'] if c else None
+
+        def fill_choices():
+            t.delete(*t.get_children())
+            st['rows'], st['ticks'], st['results'] = {}, set(), []
+            try:
+                ld = st['ld'] = self.loaded_file(path)
+                items = self.items or checks.Items()
+                ch = ws_all.choices(job, weapon_name(wpn.get()), ld, items, W.gear_index(), W)
+            except Exception as e:
+                status.config(text=f'Could not read it: {e}')
+                return
+            if not ch:
+                status.config(text="wsdist doesn't know that weapon, so it can't build its weapon skills.")
+            for c in ch:
+                if c['tick']:
+                    st['ticks'].add(c['ws'])
+                row = t.insert('', 'end', text=(ON if c['tick'] else OFF) + ' ' + c['ws'],
+                               values=(c['have'][5:] if c['have'] else 'new set', c['note']))
+                st['rows'][row] = c['ws']
+
+        def click(e):
+            row = t.identify_row(e.y)
+            ws = st['rows'].get(row)
+            if not ws or t.identify_column(e.x) != '#0' or st['busy']:
+                return
+            if ws in st['ticks']:
+                st['ticks'].discard(ws)
+            else:
+                st['ticks'].add(ws)
+            t.item(row, text=(ON if ws in st['ticks'] else OFF) + ' ' + ws)
+        t.bind('<Button-1>', click, add='+')
+        wpn.bind('<<ComboboxSelected>>', lambda e: fill_choices())
+
+        def build():
+            picks = [ws for ws in st['rows'].values() if ws in st['ticks']]
+            if not picks or st['busy']:
+                return
+            st['busy'] = True
+            bb.config(state='disabled')
+            main, offn = weapon_name(wpn.get()), off_name(off.get())
+            buffs = W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), 'auto')
+            enemy, tp = self.cfg.get('enemy', 'Apex Toad'), self.cfg.get('ws_tp', 1000)
+            st['enemy'], st['tp'] = enemy, tp
+
+            def work():
+                try:
+                    items = self.items or checks.Items()
+                    bags = checks.load_bags(who) or {}
+                    owned_ids = set()
+                    for b, c in bags.items():
+                        if not b.startswith('_') and b in checks.EQUIP_BAGS:
+                            owned_ids |= set(c)
+                    res = ws_all.build(job, sub, main, picks, st['ld'], owned_ids, items, W.gear_index(), W, tp=tp, enemy=enemy, buffs=buffs,
+                                       progress=lambda m: self.after(0, lambda m=m: status.config(text='wsdist is building: ' + m)), off=offn)
+                    self.after(0, lambda: done(res))
+                except Exception as e:
+                    self.after(0, lambda e=e: failed(e))
+            threading.Thread(target=work, daemon=True).start()
+
+        def failed(e):
+            st['busy'] = False
+            bb.config(state='normal')
+            status.config(text=f'wsdist could not do it: {e}')
+
+        def done(res):
+            st['busy'] = False
+            bb.config(state='normal')
+            st['results'] = res
+            by_ws = {r['ws']: r for r in res}
+            gains = self._ws_gains = {}
+            nows = self._ws_new_now = {}
+            base = {}
+            for s in st['ld'].sets:
+                if s['path'] == ws_all.BASE:
+                    base = {gs_loader.SLOTS.get(k.lower(), k): (v['name'] if isinstance(v, dict) else v) for k, v in s['gear'].items()}
+            for row, ws in st['rows'].items():
+                t.delete(*t.get_children(row))
+                r = by_ws.get(ws)
+                if not r:
+                    continue
+                t.item(row, values=((r['path'][5:] + ('  (new)' if r['new'] else '')), ws_all.gain_text(r)))
+                if r.get('error'):
+                    continue
+                if r['new']:
+                    nows[(path, r['path'])] = base
+                for gs, old, new, g in r['slots']:
+                    gains[(path, r['path'], gs)] = g
+                    t.insert(row, 'end', text='      ' + gs, values=(f"{fixer.item_text(old) or '(base set: nothing)'}  ->  {fixer.item_text(new)}",
+                                                                    ws_all.slot_text(g)))
+                if not r['slots']:
+                    t.insert(row, 'end', text='      (no change)', values=('your set is already the best wsdist finds', ''))
+                t.item(row, open=True)
+            n = sum(1 for r in res if not r.get('error') and (r['new'] or r['slots']))
+            status.config(text=f'{n} set(s) to write. "Damage": one {st["tp"]} TP weapon skill on {st["enemy"]}, now -> after; each slot: what it adds alone. '
+                               'Untick any you don\'t want, then Write ticked.')
+            wb_.config(state='normal' if n else 'disabled')
+
+        def write():
+            if not st['results']:
+                return
+            edits = ws_all.edits(st['results'], st['ld'], st['ticks'])
+            if not edits:
+                status.config(text='Nothing ticked to write.')
+                return
+            if self._apply({path: edits}) is not False:
+                status.config(text='Written (a backup was made first). In game: //gs reload.')
+                w.destroy()
+                self.opt_load()
+
+        bar = ttk.Frame(w, padding=8)
+        bar.pack(fill='x')
+        bb = ttk.Button(bar, text='Build', style='Big.TButton', command=build)
+        bb.pack(side='left')
+        wb_ = ttk.Button(bar, text='Write ticked', command=write, state='disabled')
+        wb_.pack(side='left', padx=8)
+        ttk.Button(bar, text='Close', command=w.destroy).pack(side='right')
+        fill_choices()
+        return {'window': w, 'tree': t, 'build': build, 'write': write, 'state': st, 'status': status, 'weapon': wpn}   # (for the tests)
 
     def _opt_weapons_changed(self, keep_set=False, lost=None):
         if not keep_set:
@@ -2844,11 +3044,11 @@ class App(tk.Tk):
         bar = ttk.Frame(one)
         bar.pack(fill='x')
         ttk.Label(bar, text='File').pack(side='left')
-        self.heal_file = ttk.Combobox(bar, state='readonly', width=26)
+        self.heal_file = SearchCombo(bar, state='readonly', width=26)
         self.heal_file.pack(side='left', padx=4)
         self.heal_file.bind('<<ComboboxSelected>>', lambda e: self.heal_load())
         ttk.Label(bar, text='Sub job').pack(side='left', padx=(8, 0))
-        self.heal_sub = ttk.Combobox(bar, values=JOBS, state='readonly', width=5)
+        self.heal_sub = SearchCombo(bar, values=JOBS, state='readonly', width=5)
         self.heal_sub.pack(side='left', padx=4)
         self.heal_sub.bind('<<ComboboxSelected>>', lambda e: self.heal_load(keep_sub=True))
         fr = ttk.Frame(one)
@@ -2874,11 +3074,11 @@ class App(tk.Tk):
         self.heal_how = ttk.Label(two, text='', wraplength=300, justify='left', foreground='#555')
         self.heal_how.grid(row=0, column=0, columnspan=4, sticky='w')
         ttk.Label(two, text='Spell').grid(row=1, column=0, sticky='w', pady=(4, 0))
-        self.heal_spell = ttk.Combobox(two, state='readonly', width=18)
+        self.heal_spell = SearchCombo(two, state='readonly', width=18)
         self.heal_spell.grid(row=1, column=1, columnspan=3, sticky='w', padx=4, pady=(4, 0))
         self.heal_spell.bind('<<ComboboxSelected>>', lambda e: self._heal_now())
         ttk.Label(two, text='Day / weather').grid(row=2, column=0, sticky='w')
-        self.heal_day = ttk.Combobox(two, state='readonly', width=32, values=list(healing.DAYWX))
+        self.heal_day = SearchCombo(two, state='readonly', width=32, values=list(healing.DAYWX))
         self.heal_day.set(list(healing.DAYWX)[0])
         self.heal_day.grid(row=2, column=1, columnspan=3, sticky='w', padx=4, pady=2)
         self.heal_day.bind('<<ComboboxSelected>>', lambda e: self._heal_now())
@@ -3225,16 +3425,16 @@ class App(tk.Tk):
         top = ttk.LabelFrame(tab, text='1. The job', padding=6)
         top.pack(fill='x')
         ttk.Label(top, text='Job').pack(side='left')
-        self.cr_job = ttk.Combobox(top, values=gs_create.ALL_JOBS, state='readonly', width=6)
+        self.cr_job = SearchCombo(top, values=gs_create.ALL_JOBS, state='readonly', width=6)
         self.cr_job.pack(side='left', padx=(4, 12))
         self.cr_job.bind('<<ComboboxSelected>>', lambda e: self.cr_load())
         ttk.Label(top, text='Sub job').pack(side='left')
-        self.cr_sub = ttk.Combobox(top, values=['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU', 'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN'], state='readonly', width=6)
+        self.cr_sub = SearchCombo(top, values=['WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN', 'BLU', 'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN'], state='readonly', width=6)
         self.cr_sub.set('WAR')
         self.cr_sub.pack(side='left', padx=(4, 12))
         self.cr_sub.bind('<<ComboboxSelected>>', lambda e: self.cr_load())
         ttk.Label(top, text='Kind of file').pack(side='left')
-        self.cr_style = ttk.Combobox(top, values=['Standalone', 'Mote'], state='readonly', width=11)
+        self.cr_style = SearchCombo(top, values=['Standalone', 'Mote'], state='readonly', width=11)
         self.cr_style.set('Standalone')
         self.cr_style.pack(side='left', padx=(4, 4))
         ToolTip(self.cr_style, "Standalone: all the rules are in the file, nothing else needed; F9 fight mode, F10 idle mode.\nMote: uses Mote-Include, which comes with GearSwap and is what most shared files build on; its usual keys and modes.")
@@ -3671,7 +3871,7 @@ class App(tk.Tk):
         sim = ttk.LabelFrame(right, text='wsdist on this set (weapon skill sets)', padding=6)
         sim.pack(fill='x', pady=(8, 0))
         ttk.Label(sim, text='Enemy').pack(side='left')
-        self.set_enemy = ttk.Combobox(sim, values=self.enemy_list, width=24, state='readonly')
+        self.set_enemy = SearchCombo(sim, values=self.enemy_list, width=24, state='readonly')
         self.set_enemy.set(self.cfg['enemy'])
         self.set_enemy.pack(side='left', padx=4)
         ttk.Label(sim, text='TP').pack(side='left', padx=(8, 0))
@@ -3781,7 +3981,7 @@ class App(tk.Tk):
         inp.pack(side='left', fill='both', expand=True)
         top.columnconfigure(0, weight=1)
         ttk.Label(inp, text='File').grid(row=0, column=0, sticky='w')
-        self.sim_file = ttk.Combobox(inp, width=30, state='readonly')
+        self.sim_file = SearchCombo(inp, width=30, state='readonly')
         self.sim_file.grid(row=0, column=1, sticky='w', padx=4, pady=2)
         self.sim_file.bind('<<ComboboxSelected>>', lambda e: self.sim_file_changed())
         ttk.Label(inp, text='Set').grid(row=1, column=0, sticky='w')
@@ -3790,11 +3990,11 @@ class App(tk.Tk):
         self.sim_set.bind('<<ComboboxSelected>>', lambda e: self.sim_set_changed())
         ToolTip(self.sim_set, 'Type part of a set name (savage, cross, idle ...) to search; Enter picks the first match.')
         ttk.Label(inp, text='Sub job').grid(row=0, column=2, sticky='w', padx=(16, 0))
-        self.sim_sub = ttk.Combobox(inp, values=JOBS, width=6, state='readonly')
+        self.sim_sub = SearchCombo(inp, values=JOBS, width=6, state='readonly')
         self.sim_sub.set('WAR')
         self.sim_sub.grid(row=0, column=3, sticky='w', padx=4)
         ttk.Label(inp, text='Enemy').grid(row=2, column=0, sticky='w')
-        self.sim_enemy = ttk.Combobox(inp, values=self.enemy_list, width=30, state='readonly')
+        self.sim_enemy = SearchCombo(inp, values=self.enemy_list, width=30, state='readonly')
         self.sim_enemy.set(self.cfg['enemy'])
         self.sim_enemy.grid(row=2, column=1, sticky='w', padx=4, pady=2)
         self.sim_tp_label = ttk.Label(inp, text='TP')
@@ -3806,11 +4006,11 @@ class App(tk.Tk):
                   command=lambda v: self.sim_tp.set(int(round(float(v) / 50) * 50))).pack(side='left')
         ttk.Label(tp, textvariable=self.sim_tp, font=MONO, width=5).pack(side='left', padx=4)
         ttk.Label(inp, text='Main weapon').grid(row=3, column=0, sticky='w')
-        self.sim_main = ttk.Combobox(inp, width=30, state='readonly', values=[WPN_AUTO])
+        self.sim_main = SearchCombo(inp, width=30, state='readonly', values=[WPN_AUTO])
         self.sim_main.set(WPN_AUTO)
         self.sim_main.grid(row=3, column=1, sticky='w', padx=4, pady=2)
         ttk.Label(inp, text='Sub').grid(row=3, column=2, sticky='w', padx=(16, 0))
-        self.sim_subw = ttk.Combobox(inp, width=26, state='readonly', values=[WPN_AUTO])
+        self.sim_subw = SearchCombo(inp, width=26, state='readonly', values=[WPN_AUTO])
         self.sim_subw.set(WPN_AUTO)
         self.sim_subw.grid(row=3, column=3, sticky='w', padx=4)
         ToolTip(self.sim_main, 'The weapon wsdist builds the set for - any weapon you own that this job can use (for a '
@@ -3833,7 +4033,7 @@ class App(tk.Tk):
         lb = ttk.Label(inp, text='Spell')
         lb.grid(row=5, column=0, sticky='w')
         ToolTip(lb, 'Nuke sets (black, scholar and blue magic): the spell wsdist judges the set by. It starts from the set\'s name.')
-        self.sim_spell = ttk.Combobox(inp, width=30, state='disabled', values=[])
+        self.sim_spell = SearchCombo(inp, width=30, state='disabled', values=[])
         self.sim_spell.grid(row=5, column=1, sticky='w', padx=4, pady=2)
         self.sim_spell.bind('<<ComboboxSelected>>', lambda e: self._sim_spell_changed())
         mf = ttk.Frame(inp)
@@ -3843,7 +4043,7 @@ class App(tk.Tk):
         self.sim_burst_btn.pack(side='left')
         ToolTip(self.sim_burst_btn, 'The spell lands in a skillchain\'s burst window: magic burst damage gear counts (up to +40 %, '
                                     'Magic burst damage II on top).')
-        self.sim_storm = ttk.Combobox(mf, width=15, state='disabled', values=magic.STORMS)
+        self.sim_storm = SearchCombo(mf, width=15, state='disabled', values=magic.STORMS)
         self.sim_storm.set('None')
         self.sim_storm.pack(side='left', padx=(8, 0))
         ToolTip(self.sim_storm, "A Scholar's storm on you: a Hachirin-no-Obi then gets the weather bonus.")
@@ -3877,7 +4077,7 @@ class App(tk.Tk):
         lb = ttk.Label(dtf, text='Idle / automaton set is for')
         lb.grid(row=6, column=0, sticky='w', pady=(4, 0))
         ToolTip(lb, 'Idle and defense sets: what counts most after your damage taken. It starts from the set\'s name: Refresh, Town, PDT, MEVA...')
-        self.sim_focus = ttk.Combobox(dtf, values=list(idle.FOCUS), state='disabled', width=14)
+        self.sim_focus = SearchCombo(dtf, values=list(idle.FOCUS), state='disabled', width=14)
         self.sim_focus.grid(row=6, column=1, columnspan=2, sticky='w', pady=(4, 0))
         self.sim_shell = tk.BooleanVar(value=False)
         self.sim_shell_btn = ttk.Checkbutton(dtf, text='Idle set: I always have Shell V (21 % magic from gear is enough)', variable=self.sim_shell, state='disabled')
@@ -4891,7 +5091,7 @@ class App(tk.Tk):
         e.pack(side='left', padx=6)
         self.gear_q.trace_add('write', lambda *a: self.fill_gear())
         # (his plan, A5: gear cleanup - two more views: spare gear no set uses, and gear sets name that sits in storage)
-        self.gear_bag = ttk.Combobox(bar, values=['all bags', 'equippable (inventory + wardrobes)', CLEAN_SPARE, CLEAN_STORED], state='readonly', width=46)
+        self.gear_bag = SearchCombo(bar, values=['all bags', 'equippable (inventory + wardrobes)', CLEAN_SPARE, CLEAN_STORED], state='readonly', width=46)
         self.gear_bag.set('equippable (inventory + wardrobes)')
         self.gear_bag.pack(side='left', padx=6)
         self.gear_bag.bind('<<ComboboxSelected>>', lambda e: self.fill_gear())
@@ -4998,7 +5198,7 @@ class App(tk.Tk):
         ws.pack(fill='x')
         # His plan (A3): content profiles - where he is going sets the monster and the buffs in one pick
         ttk.Label(ws, text='Where are you going?').grid(row=0, column=2, sticky='w', padx=(24, 0))
-        self.cfg_profile = ttk.Combobox(ws, values=['(my own mix)'] + [p['name'] for p in gsd_enemies.PROFILES], width=32, state='readonly')
+        self.cfg_profile = SearchCombo(ws, values=['(my own mix)'] + [p['name'] for p in gsd_enemies.PROFILES], width=32, state='readonly')
         self.cfg_profile.set(gsd_enemies.profile_of(self.cfg.get('enemy'), self.cfg.get('buffs')) or '(my own mix)')
         self.cfg_profile.grid(row=0, column=3, sticky='w', padx=6)
         self.cfg_profile.bind('<<ComboboxSelected>>', lambda e: self.pick_profile())
@@ -5010,7 +5210,7 @@ class App(tk.Tk):
         self.cfg_tp = tk.IntVar(value=self.cfg['tp'])
         ttk.Spinbox(ws, from_=1000, to=3000, increment=100, textvariable=self.cfg_tp, width=6).grid(row=0, column=1, sticky='w', padx=6)
         ttk.Label(ws, text='Enemy').grid(row=1, column=0, sticky='w')
-        self.cfg_enemy = ttk.Combobox(ws, values=self.enemy_list, width=28, state='readonly')
+        self.cfg_enemy = SearchCombo(ws, values=self.enemy_list, width=28, state='readonly')
         self.cfg_enemy.set(self.cfg['enemy'])
         self.cfg_enemy.grid(row=1, column=1, sticky='w', padx=6, pady=2)
         self.cfg_enemy.bind('<Button-1>', lambda e: self.cfg_enemy.configure(values=self.enemy_list))
@@ -5032,7 +5232,7 @@ class App(tk.Tk):
         self.cfg_tp_sets = tk.BooleanVar(value=self.cfg.get('tp_sets', True))
         ttk.Checkbutton(tpf, text='Also check TP sets (sets.engaged / sets.TP) for faster ones from your gear', variable=self.cfg_tp_sets).grid(row=0, column=0, columnspan=4, sticky='w')
         ttk.Label(tpf, text='Judge them by').grid(row=1, column=0, sticky='w', pady=(4, 0))
-        self.cfg_tp_metric = ttk.Combobox(tpf, values=list(TP_METRIC_TEXT.values()), state='readonly', width=30)
+        self.cfg_tp_metric = SearchCombo(tpf, values=list(TP_METRIC_TEXT.values()), state='readonly', width=30)
         self.cfg_tp_metric.set(TP_METRIC_TEXT.get(self.cfg.get('tp_metric'), TP_METRIC_TEXT['time']))
         self.cfg_tp_metric.grid(row=1, column=1, sticky='w', padx=6, pady=(4, 0))
         ttk.Label(tpf, text='Weapon skill at').grid(row=1, column=2, sticky='w', padx=(12, 0), pady=(4, 0))
@@ -5046,7 +5246,7 @@ class App(tk.Tk):
         self.cfg_subs = {}
         for i, job in enumerate(JOBS):
             ttk.Label(subs, text=job).grid(row=i // 8, column=(i % 8) * 2, sticky='e', padx=(8, 2), pady=2)
-            cb = ttk.Combobox(subs, values=JOBS, width=5, state='readonly')
+            cb = SearchCombo(subs, values=JOBS, width=5, state='readonly')
             cb.set(self.cfg['subs'].get(job, 'WAR'))
             cb.grid(row=i // 8, column=(i % 8) * 2 + 1, sticky='w')
             self.cfg_subs[job] = cb
@@ -5102,13 +5302,13 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ buffs: what's up while a set is judged
     def _buffs_box(self, parent):
-        box = ttk.Combobox(parent, values=list(W.BUFF_CHOICES.values()), width=22, state='readonly')
+        box = SearchCombo(parent, values=list(W.BUFF_CHOICES.values()), width=22, state='readonly')
         box.set(W.BUFF_CHOICES.get(self.cfg.get('buffs'), W.BUFF_CHOICES['party']))
         box.bind('<<ComboboxSelected>>', lambda e: box.get() == W.BUFF_CHOICES['custom'] and self.open_custom_buffs())
         return box
 
     def _am_box(self, parent):
-        box = ttk.Combobox(parent, values=list(W.AM_CHOICES.values()), width=25, state='readonly')
+        box = SearchCombo(parent, values=list(W.AM_CHOICES.values()), width=25, state='readonly')
         box.set(W.AM_CHOICES.get(str(self.cfg.get('aftermath', 'auto')), W.AM_CHOICES['auto']))
         return box
 
@@ -5148,7 +5348,7 @@ class App(tk.Tk):
 
         def bonus(parent, row, label, values, val):
             ttk.Label(parent, text=label).grid(row=row, column=0, sticky='w', pady=(6, 0))
-            cb = ttk.Combobox(parent, values=values, width=7, state='readonly')
+            cb = SearchCombo(parent, values=values, width=7, state='readonly')
             cb.set(val)
             cb.grid(row=row, column=1, sticky='w', pady=(6, 0))
             return cb
@@ -5163,12 +5363,12 @@ class App(tk.Tk):
                 v[kind][name] = b
                 ttk.Checkbutton(whm, text=name, variable=b, command=lambda k=kind, n=name: only_one(k, n)).pack(anchor='w')
         ttk.Label(whm, text='Boost / Gain').pack(anchor='w', pady=(6, 0))
-        self.buff_boost = ttk.Combobox(whm, values=['None'] + opts['boost'], width=16, state='readonly')
+        self.buff_boost = SearchCombo(whm, values=['None'] + opts['boost'], width=16, state='readonly')
         self.buff_boost.set(spec.get('boost') or 'None')
         self.buff_boost.pack(anchor='w')
         oth = ttk.LabelFrame(left, text='Food and Afterglow', padding=6)
         oth.pack(fill='x', pady=(8, 0))
-        self.buff_food = ttk.Combobox(oth, values=['None'] + opts['food'], width=20, state='readonly')
+        self.buff_food = SearchCombo(oth, values=['None'] + opts['food'], width=20, state='readonly')
         self.buff_food.set(spec.get('food') or 'None')
         self.buff_food.pack(anchor='w')
         ttk.Label(oth, text='Afterglow from someone else\'s\nUltimate Weapon, within 10\'').pack(anchor='w', pady=(6, 0))
@@ -5195,7 +5395,7 @@ class App(tk.Tk):
             b = tk.BooleanVar(value=name in rolls)
             v['rolls'][name] = b
             ttk.Checkbutton(cor, text=name, variable=b, command=lambda n=name: limit('rolls', n)).grid(row=i, column=0, sticky='w')
-            cb = ttk.Combobox(cor, values=W.ROLL_NUMBERS, width=5, state='readonly')
+            cb = SearchCombo(cor, values=W.ROLL_NUMBERS, width=5, state='readonly')
             cb.set(rolls.get(name, 'VII'))
             cb.grid(row=i, column=1, sticky='w', pady=1)
             self.buff_roll_no[name] = cb
@@ -5385,21 +5585,21 @@ class App(tk.Tk):
         for f in r['files']:
             probs = [p for p in f['problems'] if self.kind_on[p['kind']].get()] if f['problems'] else []
             if self.only_fix.get():
-                probs = [p for p in probs if p['kind'] == 'unknown' and p.get('fix')]
+                probs = [p for p in probs if (p['kind'] == 'unknown' or p.get('edit')) and p.get('fix')]
             probs.sort(key=lambda p: (LEVEL_RANK[KIND_LEVEL.get(p['kind'], 'info')], p['kind'], p['item']))
             if not probs:
                 continue
             fid = t.insert('', 'end', iid=self._iid('p'), text=f"{f['file']}  ({len(probs)})", open=any(p['kind'] in ('broken', 'unknown') for p in probs))
             for p in probs:
                 fix = p.get('fix')
-                fixable = p['kind'] == 'unknown' and fix
+                fixable = (p['kind'] == 'unknown' or p.get('edit')) and fix
                 detail = p['detail'] + (f'   [fix: {fix}]' if fixable else '')
                 lv = KIND_LEVEL.get(p['kind'], 'info')
                 row = t.insert(fid, 'end', iid=self._iid('p'), text=(OFF + ' ' if fixable else '   ') + KIND_TEXT.get(p['kind'], p['kind']),
                                values=(LEVEL_TEXT[lv], KIND_TEXT.get(p['kind'], p['kind']), p['item'], p['slot'], detail, len(p['sets'])),
                                tags=(lv,))
                 if fixable:
-                    self.rows[row] = (f['path'], ('rename', p['item'], fix))
+                    self.rows[row] = (f['path'], tuple(p['edit']) if p.get('edit') else ('rename', p['item'], fix))
                 where = ', '.join(x for x in p['sets'] if x)
                 means, todo = KIND_HELP.get(p['kind'], ('', ''))
                 self.info[row] = (f"{LEVEL_TEXT[lv]} - {KIND_TEXT.get(p['kind'], p['kind'])}: {p['item']} {p['detail']}"
@@ -5538,7 +5738,7 @@ class App(tk.Tk):
         for path, edits in by_file.items():
             lines.append(os.path.basename(path) + ':')
             for e in edits:
-                lines.append(f'   {e[1]} -> {e[2]}' if e[0] == 'rename' else f'   new set {e[2]}' if e[0] == 'add'
+                lines.append(f'   {e[1]} -> {e[2]}' if e[0] in ('rename', 'rename_key') else f'   new set {e[2]}' if e[0] == 'add'
                              else f'   new set {e[1]}' if e[0] == 'new' else f'   {e[1]}: HP order' if e[0] == 'priority'
                              else f'   {e[1]}: ' + ', '.join(f'{k} {fixer.item_text(v)}' for k, v in e[2].items()))
         if not self.confirm_changes(by_file):
@@ -5579,6 +5779,15 @@ class App(tk.Tk):
         self._stale = True
         self.status.config(text='Your files changed. The check-up results are from before the change: click Check now when you want them updated.')
 
+    def _slot_gains(self):
+        """{(file, set, slot): damage change of that slot alone}: the check-up's weapon skill upgrades and the last "every weapon skill" build."""
+        out = dict(getattr(self, '_ws_gains', {}) or {})
+        for f in (self.report or {}).get('files', []) if getattr(self, 'report', None) else []:
+            for u in f.get('upgrades', []):
+                for slot, g in (u.get('slot_gain') or {}).items():
+                    out.setdefault((f['path'], u['set'], slot), g)
+        return out
+
     def confirm_changes(self, by_file):
         """A clear list of exactly what will change, before anything is written. True = go ahead."""
         w = tk.Toplevel(self)
@@ -5589,8 +5798,10 @@ class App(tk.Tk):
         ttk.Label(w, text=f'{n} change(s) in {len(by_file)} file(s):', font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
         frame = ttk.Frame(w)
         frame.pack(fill='both', expand=True, padx=10)
-        t = ttk.Treeview(frame, columns=('set', 'slot', 'now', 'new'), show='tree headings')
-        for c, h, wd in (('#0', 'File', 190), ('set', 'Set / name', 250), ('slot', 'Slot', 60), ('now', 'Now', 170), ('new', 'Becomes', 190)):
+        t = ttk.Treeview(frame, columns=('set', 'slot', 'now', 'new', 'dmg'), show='tree headings')
+        gains = self._slot_gains()
+        for c, h, wd in (('#0', 'File', 170), ('set', 'Set / name', 230), ('slot', 'Slot', 55), ('now', 'Now', 160), ('new', 'Becomes', 180),
+                         ('dmg', 'Damage', 80)):
             t.heading(c, text=h)
             t.column(c, width=wd, anchor='w')
         sb = ttk.Scrollbar(frame, orient='vertical', command=t.yview)
@@ -5601,12 +5812,17 @@ class App(tk.Tk):
             for e in edits:
                 if e[0] == 'rename':
                     t.insert('', 'end', text=os.path.basename(path), values=('misspelled name (every set)', '', e[1], e[2]))
+                elif e[0] == 'rename_key':
+                    t.insert('', 'end', text=os.path.basename(path), values=('set name GearSwap never uses', '', e[1], e[2]))
                 elif e[0] == 'add':
                     for slot, new in e[3].items():
                         t.insert('', 'end', text=os.path.basename(path), values=(e[2] + '  (new set)', slot, '', fixer.item_text(new)))
                 elif e[0] == 'new':
+                    old_ = getattr(self, '_ws_new_now', {}).get((path, e[1]), {})
                     for slot, new in e[2].items():
-                        t.insert('', 'end', text=os.path.basename(path), values=(e[1] + '  (new set)', slot, '', fixer.item_text(new)))
+                        g = gains.get((path, e[1], slot))
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[1] + '  (new set)', slot, fixer.item_text(old_.get(slot, '')),
+                                                                                 fixer.item_text(new), '' if g is None else f'{g:+,.0f}'))
                 elif e[0] == 'priority':
                     cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
                     for slot, n in sorted(e[2].items(), key=lambda x: -x[1]):
@@ -5614,7 +5830,9 @@ class App(tk.Tk):
                 else:
                     cur = self.set_gear(path, e[1]) if path in self.loaded or os.path.exists(path) else {}
                     for slot, new in e[2].items():
-                        t.insert('', 'end', text=os.path.basename(path), values=(e[1], slot, cur.get(slot, ''), fixer.item_text(new)))
+                        g = gains.get((path, e[1], slot))
+                        t.insert('', 'end', text=os.path.basename(path), values=(e[1], slot, cur.get(slot, ''), fixer.item_text(new),
+                                                                                 '' if g is None else f'{g:+,.0f}'))
         ttk.Label(w, text='Each file is backed up first ("Undo last change" puts it back). A change that would stop a file from '
                           'loading is refused. In game: //gs reload afterwards.', foreground='#555', wraplength=860).pack(anchor='w', padx=10, pady=6)
         res = {'ok': False}

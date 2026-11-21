@@ -331,16 +331,41 @@ def name_fixes(loaded):
                 new = p.replace(f'["{part}"]', f'["{hit}"]', 1)
                 if new not in have:
                     out.append((p, new, part, hit))
+        # a name run together (his DRK file's sets.precast.WS.SavageBlade, 2026-11-21): GearSwap looks for sets.precast.WS["Savage Blade"]
+        # (only right after WS / JA: there GearSwap always looks for the exact name; a midcast "BloodPactWard" is a file's own group name)
+        for part in re.findall(r'\.(?:WS|JA)\.([A-Za-z][A-Za-z0-9]*)', p):
+            if part.lower() in names:
+                continue
+            hit = _squashed().get(_squash(part))
+            if hit:
+                new = re.sub(r'\.' + part + r'(?=$|[.\[])', f'["{hit}"]', p, count=1)
+                if new not in have and (p, new, part, hit) not in out:
+                    out.append((p, new, part, hit))
     return out
+
+
+def _squash(s):
+    return re.sub(r"[\s'\-:.]", '', s.lower())
+
+
+_SQ = None
+
+
+def _squashed():
+    """{name with no spaces / quotes / dashes: real name}, for names of more than one word only."""
+    global _SQ
+    if _SQ is None:
+        _SQ = {_squash(n): n for n in known_names().values() if re.search(r"[\s'\-:]", n)}
+    return _SQ
 
 
 def rename_edits(fixes):
     """fixer's 'rename' edits: the wrong name -> the real one, everywhere it is quoted in the file (so the file's own rules that name it change too)."""
     out, seen = [], set()
-    for _, _, wrong, real in fixes:
+    for path, _, wrong, real in fixes:
         if wrong not in seen:
             seen.add(wrong)
-            out.append(('rename', wrong, real))
+            out.append(('rename', wrong, real) if f'["{wrong}"]' in path else ('rename_key', wrong, real))
     return out
 
 

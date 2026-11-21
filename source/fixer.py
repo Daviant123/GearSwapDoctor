@@ -331,6 +331,16 @@ def rename(src, old, new):
     return out
 
 
+def rename_key(src, old, new):
+    """A set name written run together after a dot (sets.precast.WS.SavageBlade) -> its real name in brackets (sets.precast.WS["Savage Blade"]),
+    everywhere a set path names it."""
+    rx = re.compile(r'(\bsets(?:\.[A-Za-z_]\w*|\[[^\]\n]+\])*)\.' + re.escape(old) + r'\b')
+    out, n = rx.subn(lambda m: m.group(1) + '[' + _lua_str(new) + ']', src)
+    if n == 0:
+        raise EditError(f'"{old}" not found in the file')
+    return out
+
+
 def backup(path):
     stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S')
     folder = os.path.join(BACKUPS, stamp)
@@ -353,6 +363,9 @@ def apply(path, edits):
         try:
             if e[0] == 'rename':
                 new = rename(new, e[1], e[2])
+                done.append(f'{e[1]} -> {e[2]}')
+            elif e[0] == 'rename_key':
+                new = rename_key(new, e[1], e[2])
                 done.append(f'{e[1]} -> {e[2]}')
             elif e[0] == 'slots':
                 new = set_slots(new, e[1], e[2])
