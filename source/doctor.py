@@ -846,7 +846,9 @@ def tp_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ws_tp=
     import pup
     # (a PUP's sets for the automaton aren't about the master's speed: pet_upgrades)
     import pld
-    tps = sorted((s for s in loaded.sets if is_tp_set(s['path']) and not pup.is_pet_set(s['path'], job) and not pld.takes(s['path'], job)),
+    # (a COR's engaged.Ranged is worn while shooting, not swinging: Gear Optimization judges it for damage taken)
+    tps = sorted((s for s in loaded.sets if is_tp_set(s['path']) and not pup.is_pet_set(s['path'], job) and not pld.takes(s['path'], job)
+                  and not (job in ('COR', 'RNG') and s['path'].split('.')[:3] == ['sets', 'engaged', 'Ranged'])),
                  key=lambda s: (s['path'].count('.'), len(s['path'])))
     stats = stats if stats is not None else {}
     stats.update(total=len(tps), checked=0, same=0, not_checked={}, stopped=False)

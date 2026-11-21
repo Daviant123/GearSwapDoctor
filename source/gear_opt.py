@@ -138,6 +138,10 @@ def classify(loaded, job):
             f = pup.focus_for(p)
             sit = pup.situation(p)
             row.update(group=PUP_GROUP.get(sit, 'Automaton fighting, you standing'), focus=f, judge='pup', why=pup.SITUATION.get(sit, ''))
+        elif job in ('COR', 'RNG') and p.split('.')[:3] == ['sets', 'engaged', 'Ranged']:
+            row.update(group='Shooting', judge='idle', focus='Damage taken',
+                       why=('Worn when you are engaged in Offense mode "Ranged": you stand back and shoot. Between shots only staying alive counts '
+                            '(the shot itself wears midcast.RA, the start of it precast.RA), so it is judged for damage taken. Your gun and ammo stay.'))
         elif job == 'PUP' and p.startswith('sets.engaged') and not pup.is_pet_set(p, job):
             row.update(group='You fighting, no automaton', judge='wsdist',
                        why='You fighting with no automaton out (Godhands and the like): your own damage, judged by wsdist. Automaton stats on '
@@ -314,7 +318,8 @@ def judge(row, ctx, focus=None, build=True):
     gear = with_weapons(row['gear'], ctx.weapons)
     key = (row['judge'], focus, tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in gear.items())),
            tuple(sorted(need.items())), row['path'].startswith('sets.buff'), build, ctx.ihp,
-           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None, real.spell_of(row['path']) if row['judge'] == 'job' else None, real.ENEMY, repr(real.BUFFS))
+           job_sets.ability_of(row['path']) if row['judge'] == 'job' else None, real.spell_of(row['path']) if row['judge'] == 'job' else None, real.ENEMY, repr(real.BUFFS),
+           job_sets.flurry_of(row['path']) if row['judge'] == 'job' else 0)
     if key in ctx._cache:
         return ctx._cache[key]
     a = (row['path'], gear, ctx.job, ctx.sub, ctx.cands, ctx.counts, ctx.items, ctx.data)

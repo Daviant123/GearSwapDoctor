@@ -74,8 +74,13 @@ def ammo_problems(loaded, items, job, owned_ids=None):
     return list(out.values())
 
 
+AMMO_FIX = 'ammo_fix'            # (the 4th part of a 'slots' edit that puts the right bullet back where a set's ammo took the gun off)
+
+
 def safe_edits(job, edits, items):
-    """A list of edits for a file, without any that would put such ammo in (an old report's upgrade can still ask)."""
+    """A list of edits for a file, with the ammo slot left alone for a COR or RNG (his request 2026-11-21: "make sure the ammo slot isnt getting
+    changed"): no new ammo in a set, a new set or an added set - not even another bullet, which a shot or weapon skill would use up. The one
+    exception is the check-up's repair (tagged AMMO_FIX): a bullet put back where the set's own ammo would take the gun off."""
     if (job or '').upper() not in RANGED_JOBS:
         return edits
     out = []
@@ -83,11 +88,15 @@ def safe_edits(job, edits, items):
         if e[0] == 'slots' and isinstance(e[2], dict) and 'ammo' in e[2]:
             v = e[2]['ammo']
             name = v.get('name') if isinstance(v, dict) else v
-            if takes_gun_off(name, items):
+            if not (len(e) > 3 and e[3] == AMMO_FIX and not takes_gun_off(name, items)):
                 changes = {k: x for k, x in e[2].items() if k != 'ammo'}
                 if not changes:
                     continue
-                e = (e[0], e[1], changes) + tuple(e[3:])
+                e = (e[0], e[1], changes) + tuple(x for x in e[3:] if x != AMMO_FIX)
+        elif e[0] == 'new' and isinstance(e[2], dict) and 'ammo' in e[2]:
+            e = (e[0], e[1], {k: x for k, x in e[2].items() if k != 'ammo'}) + tuple(e[3:])
+        elif e[0] == 'add' and len(e) > 3 and isinstance(e[3], dict) and 'ammo' in e[3]:
+            e = (e[0], e[1], e[2], {k: x for k, x in e[3].items() if k != 'ammo'}) + tuple(e[4:])
         out.append(e)
     return out
 

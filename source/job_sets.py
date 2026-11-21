@@ -723,6 +723,14 @@ def th_cap(job, sub):
 SNAP_GEAR_CAP = 60          # (70 % in all, 10 from 5/5 merits)
 
 
+def flurry_of(path):
+    """The Snapshot % a set's name says Flurry gives while it is worn: Flurry 15, Flurry II 30 (RESEARCH.md), else 0."""
+    low = (path or '').lower().replace('"', '').replace('[', '.').replace(']', '')
+    if 'flurry2' in low or 'flurry ii' in low or 'flurryii' in low:
+        return 30
+    return 15 if 'flurry' in low else 0
+
+
 def ctx_for(job, sub, ability=None, song=None, spell=None):
     return {'job': (job or '').upper(), 'sub': (sub or '').upper(), 'ability': ability, 'song': song, 'spell': spell}
 
@@ -759,6 +767,9 @@ def numbers(gear, focus, ctx=None):
     n['ability'] = a
     n['hp'] = sum(pld.hp_of(c) for c in gear.values() if c)
     n['ds_absorb'] = round((pld.BASE_HP + n['hp']) * 0.5 * (1 + t.get('ds_pot', 0) / 100))
+    if ctx.get('flurry'):
+        n['flurry'] = ctx['flurry']
+        n['snap_cap'] = max(0, SNAP_GEAR_CAP - ctx['flurry'])
     # real results where a formula is known (real.py, PLAN.md E1): the points of the stats it stands for are dropped in value()
     import real
     if focus == 'Phalanx':
@@ -796,7 +807,7 @@ def capped(n, focus):
     c['quick'] = min(n.get('quick', 0), healing.CAP_QUICK)
     c['sird'] = min(n.get('sird', 0), 92)
     c['th'] = min(n.get('th', 0), n.get('th_cap', 4))
-    c['snap'] = min(n.get('snap', 0), SNAP_GEAR_CAP)
+    c['snap'] = min(n.get('snap', 0), n.get('snap_cap', SNAP_GEAR_CAP))
     c['bp1'] = min(n.get('bp1', 0), 15)
     c['bp2'] = min(n.get('bp2', 0), 15)
     c['potency'] = min(n.get('potency', 0), healing.CAP_POTENCY)
@@ -865,7 +876,7 @@ def words(n, focus=None):
             out.append(f"Treasure Hunter +{v} of {n.get('th_cap', 4)} from gear")
             continue
         if k == 'snap':
-            out.append(f"Snapshot {v} % of {SNAP_GEAR_CAP} from gear")
+            out.append(f"Snapshot {v} % of {n.get('snap_cap', SNAP_GEAR_CAP)} from gear" + (f" (Flurry gives {n['flurry']} %)" if n.get('flurry') else ''))
             continue
         if k in ('bp1', 'bp2'):
             out.append(f"{lab} -{v} of 15")
@@ -897,10 +908,12 @@ def advice(n, focus):
         tips.append(f"Treasure Hunter +{n.get('th', 0)} from gear: the most that counts is +{n['th_cap']}")
     if f == 'Treasure Hunter' and n.get('th', 0) > n.get('th_cap', 4):
         tips.append(f"Treasure Hunter +{n['th']}: past +{n['th_cap']} does nothing")
-    if f == 'Snapshot' and n.get('snap', 0) < SNAP_GEAR_CAP:
-        tips.append(f"Snapshot {n.get('snap', 0)} %: {SNAP_GEAR_CAP} % from gear is the cap (with 5/5 merits); Flurry from a RDM / GEO adds more")
-    if f == 'Snapshot' and n.get('snap', 0) > SNAP_GEAR_CAP:
-        tips.append(f"Snapshot {n['snap']} %: past {SNAP_GEAR_CAP} % from gear does nothing without Flurry off")
+    cap_ = n.get('snap_cap', SNAP_GEAR_CAP)
+    if f == 'Snapshot' and n.get('snap', 0) < cap_:
+        tips.append(f"Snapshot {n.get('snap', 0)} %: {cap_} % from gear is the cap (with 5/5 merits" + (f" and Flurry's {n['flurry']} %)" if n.get('flurry') else
+                                                                                          "); Flurry from a RDM / GEO adds more"))
+    if f == 'Snapshot' and n.get('snap', 0) > cap_:
+        tips.append(f"Snapshot {n['snap']} %: past {cap_} % from gear does nothing" + (" with Flurry up: the rest could be Rapid Shot" if n.get('flurry') else ''))
     if f == 'Blood Pact delay' and (n.get('bp1', 0) > 15 or n.get('bp2', 0) > 15):
         tips.append('Blood Pact delay past -15 (each kind) does nothing')
     if f == 'Songs: dummy' and n.get('song_dur', 0):
@@ -957,6 +970,8 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
                                                       'Quick Draw: damage', 'Quick Draw: accuracy')) else None, song)
     if focus == 'Phantom Roll' and ab == 'Phantom Roll':
         ctx['ability'] = None
+    if focus == 'Snapshot' and flurry_of(path):              # (sets.precast.RA.Flurry / .Flurry2: a set for when that buff is up)
+        ctx['flurry'] = flurry_of(path)
     if focus.startswith('Ranged shots') or focus == 'Steps':                      # (how often it hits the picked monster: real.py)
         import real
         kind = 'ranged' if focus.startswith('Ranged') else 'melee'

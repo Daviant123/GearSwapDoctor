@@ -61,7 +61,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.36.0'
+VERSION = '2.37.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -824,7 +824,7 @@ class App(tk.Tk):
                 elif p['kind'] == 'ammo' and p.get('fix'):
                     key = ('a', f['path'], p['item'])
                     row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}: takes your gun off", values=(p['fix'], len(p['sets'])))
-                    self.job_rowkey[('fix', row)] = (key, (f['path'], ('slots', p['sets'][0], {'ammo': p['fix']})))
+                    self.job_rowkey[('fix', row)] = (key, (f['path'], ('slots', p['sets'][0], {'ammo': p['fix']}, job_rules.AMMO_FIX)))
                     n_fix += 1
                 elif p['kind'] == 'missing':
                     n_missing += 1
@@ -1039,7 +1039,7 @@ class App(tk.Tk):
                     if p['kind'] == 'unknown' and p.get('fix') and ('r', f['path'], p['item']) in self.job_ticks:
                         by_file.setdefault(f['path'], []).append(('rename', p['item'], p['fix']))
                     if p['kind'] == 'ammo' and p.get('fix') and ('a', f['path'], p['item']) in self.job_ticks:
-                        by_file.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}) for s in p['sets'])
+                        by_file.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}, job_rules.AMMO_FIX) for s in p['sets'])
             if part in (None, 'up'):
                 for u in f['upgrades']:
                     if 'error' not in u and ('u', f['path'], u['set']) in self.job_ticks:
@@ -1128,7 +1128,7 @@ class App(tk.Tk):
                 edits = {}
                 for f, p in found:
                     if p.get('fix'):
-                        edits.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}) for s in p['sets'])
+                        edits.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}, job_rules.AMMO_FIX) for s in p['sets'])
                 self._apply(edits)
             n_sets = sum(len(p['sets']) for f, p in by['ammo'])
             self._card('must', f"{n_sets} set(s) take your gun off", KIND_HELP['ammo'][0], [('Put bullets back', fix_ammo)])
