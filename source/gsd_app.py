@@ -61,7 +61,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.35.2'
+VERSION = '2.36.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2164,7 +2164,7 @@ class App(tk.Tk):
                 r['r'] = o['r']
         self.opt_rows, self._opt_ld, self._opt_path = rows, ld, path
         self._opt_fill()
-        n = sum(1 for r in rows if r['judge'] in ('pld', 'idle', 'job'))
+        n = sum(1 for r in rows if r['judge'] in ('pld', 'idle', 'job', 'pup'))
         self.opt_status.config(text=f"{len(ld.sets)} sets: {n} judged here by what they are for"
                                     + ('' if any(r.get('r') for r in rows) else ' - press "Look at every set"'))
         self._opt_checks_fill()
@@ -2269,7 +2269,7 @@ class App(tk.Tk):
         again = None
         for g in sorted(groups, key=lambda g: order.index(g) if g in order else 99):
             rows = groups[g]
-            judged = [r for r in rows if r['judge'] in ('pld', 'idle', 'job')]
+            judged = [r for r in rows if r['judge'] in ('pld', 'idle', 'job', 'pup')]
             nb = sum(1 for r in rows if r.get('r') and r['r'].get('better'))
             label = f"{g}  ({len(rows)})" + (f"  - {nb} better" if nb else '')
             can = self._opt_tickable(rows)
@@ -2295,7 +2295,7 @@ class App(tk.Tk):
         if r.get('error'):
             return (tick, focus, 'could not judge: ' + r['error'][:40], '', '')
         if not res:
-            return (tick, focus, '(new set)' if r.get('new') else ('...' if r['judge'] in ('pld', 'idle', 'job') else ''), '', '')
+            return (tick, focus, '(new set)' if r.get('new') else ('...' if r['judge'] in ('pld', 'idle', 'job', 'pup') else ''), '', '')
         now = 'none yet' if r.get('new') else gear_opt.short(r, res)
         best = gear_opt.short(r, res, 'best') if (res['changes'] or r.get('new')) else 'already the best'
         gain = 'new' if r.get('new') else (f"+{res['gain']:.0f} %" if res.get('better') and res['gain'] >= 1 else 'fix' if res.get('better') else '')
@@ -2306,7 +2306,7 @@ class App(tk.Tk):
             return ('new',)
         if r.get('r') and r['r'].get('better'):
             return ('better',)
-        return () if r['judge'] in ('pld', 'idle', 'job') else ('other',)
+        return () if r['judge'] in ('pld', 'idle', 'job', 'pup') else ('other',)
 
     def _opt_refresh_row(self, r):
         for iid, x in self.opt_iid.items():
@@ -2359,7 +2359,7 @@ class App(tk.Tk):
         self.opt_stop_btn.config(state='normal')
         self.opt_status.config(text='Reading your gear ...')
         self.progress.config(mode='determinate', value=0)
-        rows = [r for r in self.opt_rows if r['judge'] in ('pld', 'idle', 'job') and not r.get('r')]
+        rows = [r for r in self.opt_rows if r['judge'] in ('pld', 'idle', 'job', 'pup') and not r.get('r')]
 
         def work():
             try:
@@ -2553,7 +2553,7 @@ class App(tk.Tk):
             if r.get('ideas') is not None:
                 tx.insert('end', '\nGear you don\'t have that would do more\n', 'h')
                 tx.insert('end', (', '.join(f'{name} ({s})' for s, name, d in r['ideas']) or 'nothing found') + '\n')
-        elif r['judge'] in ('pld', 'idle', 'job'):
+        elif r['judge'] in ('pld', 'idle', 'job', 'pup'):
             tx.insert('end', 'Not judged yet: press "Look at every set".\n', 'grey')
         tx.config(state='disabled')
         if res:
@@ -2567,7 +2567,7 @@ class App(tk.Tk):
         self.opt_write_one.config(state='normal' if can and not self._opt_busy else 'disabled',
                                   text='Add this set to the file' if r.get('new') else 'Write this set')
         self.opt_build_btn.config(state='normal' if not r.get('new') else 'disabled')
-        self.opt_ideas_btn.config(state='normal' if res and r['judge'] in ('pld', 'job') and not self._opt_busy else 'disabled')
+        self.opt_ideas_btn.config(state='normal' if res and r['judge'] in ('pld', 'job', 'pup') and not self._opt_busy else 'disabled')
 
     def _opt_focus_changed(self):
         r = self.opt_cur

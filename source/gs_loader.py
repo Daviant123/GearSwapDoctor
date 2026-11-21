@@ -9,6 +9,7 @@ gear, plus problems found on the way:
 Nothing is sent to the game and nothing in the file is changed here.
 """
 import os
+import re
 import lupa
 
 SLOTS = {
@@ -167,9 +168,10 @@ end
 function GS_WALK(env, slots)
   local out = {}
   local seen = {}
+  ALIASES = {}
   local function walk(t, path)
-    if seen[t] then return end
-    seen[t] = true
+    if seen[t] then ALIASES[path] = seen[t] return end      -- (sets.idle.Pet.Engaged.Heal = sets.idle.Pet.Engaged.Magic: one set, two names)
+    seen[t] = path
     local gear = {}
     for k, v in pairs(t) do
       if type(k) == 'string' and slots[k:lower()] and (type(v) == 'string' or (type(v) == 'table' and type(rawget(v, 'name')) == 'string')) then
@@ -182,8 +184,12 @@ function GS_WALK(env, slots)
       end
     end
     if next(gear) then out[#out + 1] = { path = path, gear = gear } end
-    for k, v in pairs(t) do
-      if type(v) == 'table' and not (type(k) == 'string' and slots[k:lower()]) and rawget(v, 'name') == nil then
+    local keys = {}
+    for k in pairs(t) do keys[#keys + 1] = k end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    for _, k in ipairs(keys) do
+      local v = t[k]
+      if type(v) == 'table' and rawget(v, 'name') == nil and (not (type(k) == 'string' and slots[k:lower()]) or next(v) ~= nil) then
         local kp = (type(k) == 'string' and k:match('^[%a_][%w_]*$')) and (path .. '.' .. k) or (path .. '[' .. string.format('%q', tostring(k)) .. ']')
         walk(v, kp)
       end
@@ -223,6 +229,7 @@ class Loaded:
         self.error = None       # the file didn't load: Lua's message
         self.warnings = []      # a setup function failed (the sets made before it are still read)
         self.lists = {}         # the file's own lists of names: {'gsList': ['Ragnarok', ...]}
+        self.aliases = {}       # {other name: the set's own name} for a set given a second name (sets.idle.Pet.Engaged.Heal = sets.idle.Pet.Engaged.Magic)
 
 
 _lua = None
@@ -284,6 +291,21 @@ def load(path):
     for name in list(lists):
         names = lists[name]
         res.lists[str(name)] = sorted(str(names[j]) for j in range(1, len(names) + 1))
+    al = L.globals().ALIASES
+    for k in list(al or []):
+        other, own = str(k), str(al[k])
+        # (the name written with its own table or set_combine is the set's own: the one an edit can find)
+        if re.search(re.escape(other).replace(r'\.', r'\s*\.\s*') + r'\s*=\s*(?:\{|set_combine)', src) and not re.search(re.escape(own).replace(r'\.', r'\s*\.\s*') + r'\s*=\s*(?:\{|set_combine)', src):
+            for s in res.sets:
+                if s['path'] == own:
+                    s['path'] = other
+            other, own = own, other
+        res.aliases[other] = own
+    for k in list(res.aliases):                             # (Nuke = Heal = Magic: every other name points at the set itself)
+        t, n = res.aliases[k], 0
+        while t in res.aliases and n < 20:
+            t, n = res.aliases[t], n + 1
+        res.aliases[k] = t
     res.sets.sort(key=lambda s: s['path'])
     return res
 

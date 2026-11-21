@@ -187,6 +187,9 @@ def basis(judge, focus, path='', job=''):
     """('real' | 'points', a plain line): how this set is scored. For the Gear Optimization tab."""
     job = (job or '').upper()
     f = focus or ''
+    if judge == 'pup':
+        return 'points', ("Scored by points: no source gives the automaton's formulas (wsdist's automaton part is unfinished), so each pet stat "
+                          "counts by the guides' order, gear haste first up to its 25 % cap.")
     if judge == 'wsdist':
         return 'real', 'Scored by real results: damage simulated against the monster you picked (wsdist).'
     if judge == 'pld' and f.startswith('Phalanx'):

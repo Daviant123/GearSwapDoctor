@@ -115,9 +115,13 @@ ROLE.update({
           'order': ['Pets', 'Casting fast', 'Staying alive', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
           'sources': "BG Wiki's community guide for this job is an empty page, so this uses the item text and the general rules"},
     'PUP': {'title': 'Puppetmaster: you and your automaton',
-          'text': "A Puppetmaster's automaton tanks, heals or deals damage by its frame and attachments (which the Doctor can't see). Pet sets are judged as whole sets (pet damage taken stops at 87.5 %, pet haste); your own sets by wsdist. Kenkonken with Aftermath cuts overloads.",
-          'order': ['Pets', 'Weapon skills', 'Fighting (damage)', 'Job abilities', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
-          'sources': 'BG Wiki Community Puppetmaster Guide'},
+          'text': "A Puppetmaster plays four ways, and your file wears a different set for each: you stand back while the automaton fights "
+                  "(idle.Pet.Engaged by its mode: Tank, Melee, Ranged, Nuke, Heal ... from its head and frame), you both fight (engaged ... Pet, "
+                  "Hybrid mode \"Pet\"), the automaton is out but waiting (idle.Pet), or you fight alone (engaged, judged by wsdist). Automaton "
+                  "stats count only in the first two; its weapon skill gear goes on top at 1000 pet TP. Gear haste for the automaton first (25 % cap), "
+                  "its damage taken stops at 87.5 %. The Animator is never changed: it makes the automaton.",
+          'order': ['Automaton fighting, you standing', 'You and the automaton fighting', 'Automaton weapon skills and spells', 'Automaton out, not fighting', 'You fighting, no automaton', 'Pets', 'Weapon skills', 'Fighting (damage)', 'Job abilities', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
+          'sources': 'BG Wiki Community Puppetmaster Guide, Automaton, Overdrive, String Theory; your files (Selindrile PUP.lua)'},
     'RNG': {'title': 'Ranger: shooting',
           'text': 'A Ranger shoots: Snapshot first to 70 % (60 % from gear with merits; Flurry II adds 30 %), then Rapid Shot; then ranged accuracy to the cap on your monster, Store TP, critical hits. Ability pieces for Double Shot, Barrage, Camouflage, Scavenge, Bounty Shot. Weapon skills are judged by wsdist.',
           'order': ['Shooting', 'Job abilities', 'Weapon skills', 'Fighting (damage)', 'Staying alive', 'Casting fast', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
@@ -260,6 +264,10 @@ WANTED = {
             ('sets.precast.JA.Diffusion', 'Ability', 'Diffusion: Luhlaza Charuqs'),
             ('sets.precast.JA.Efflux', 'Ability', 'Efflux'),
             ('sets.precast.JA["Azure Lore"]', 'Ability', 'Azure Lore: Luhlaza Bazubands')],
+    'PUP': [('sets.idle.Pet.Engaged.Ranged', 'Ranged (Sharpshot)', 'a Sharpshot automaton fighting while you stand back'),
+            ('sets.idle.Pet.Engaged.HybridRanged', 'Ranged (Sharpshot)', 'a Sharpshot frame with a Valoredge / Harlequin head'),
+            ('sets.idle.Pet.Engaged.Magic', 'Magic support', 'a Stormwaker / Sharpshot head caster'),
+            ('sets.idle.Pet.Engaged.Heal', 'Heal', 'a Soulsoother healer')],
     'DRK': [('sets.precast.FC', 'Fast cast', 'every spell starts faster'),
             ('sets.midcast["Dread Spikes"]', 'Dread Spikes', 'Dread Spikes: max HP and potency'),
             ('sets.midcast.Drain', 'Drain and Aspir', 'Drain: potency and Dark skill'),
@@ -406,6 +414,8 @@ def file_checks(rows, ctx, loaded=None):
         for g in ('Cure', 'Waltz'):
             for r in by_focus.get(g, [])[:1]:
                 out.append(('ok', f"{r['path'][5:]}: {gear_words(r)}"))
+    if job == 'PUP':
+        out += pup_checks(rows, getattr(ctx.loaded, 'aliases', {}) if ctx.loaded is not None else {})
     if job == 'BLU':
         for r in by_focus.get('Blue magic: skill', [])[:1]:
             n = r['r']['n_best']
@@ -432,6 +442,37 @@ def gear_words(r):
     import gear_opt
     w = gear_opt.words(r, r['r'], 'now')
     return w if len(w) <= 150 else w[:148] + '...'
+
+
+PUP_MODES = ('Melee', 'Ranged', 'HybridRanged', 'Tank', 'LightTank', 'Magic', 'Heal', 'Nuke')   # (state.PetMode in Selindrile's PUP.lua)
+
+
+def pup_checks(rows, aliases=None):
+    """A Puppetmaster file: does each pet mode have its own set while the automaton fights (you standing) and for its weapon skill, and is there a set for
+    you and the automaton fighting together (Hybrid mode "Pet")? A mode without its own set wears the plain one."""
+    paths = {r['path'].lower() for r in rows if not r.get('new')} | {a.lower() for a in (aliases or {})}
+    out = []
+    if 'sets.idle.pet.engaged' in paths:
+        lack = [m for m in PUP_MODES if f'sets.idle.pet.engaged.{m.lower()}' not in paths]
+        if lack:
+            out.append(('warn', f"Automaton fighting, you standing: {', '.join(lack)} {'has' if len(lack) == 1 else 'have'} no set of its own, so they wear idle.Pet.Engaged "
+                                "(a Melee set). A ranged or caster automaton wants other stats: make them with Gear Optimization (it adds the set)."))
+        else:
+            out.append(('ok', 'Every pet mode has its own set for when the automaton fights and you stand back.'))
+    shared = sorted((a_.split('.')[-1], t.split('.')[-1]) for a_, t in (aliases or {}).items() if a_.lower().startswith('sets.idle.pet.engaged.'))
+    if shared:
+        out.append(('ok', 'Your file gives some modes the same set: ' + ', '.join(f'{a_} wears your {t} set' for a_, t in shared)
+                    + '. A change to that set changes them all.'))
+    if 'sets.midcast.pet.petwsgear' in paths:
+        lack = [m for m in PUP_MODES if f'sets.midcast.pet.petwsgear.{m.lower()}' not in paths]
+        if lack:
+            out.append(('warn', f"Automaton weapon skill: {', '.join(lack)} use the plain PetWSGear set (it goes on at 1000 pet TP)."))
+    if any(p.startswith('sets.engaged') and p.endswith('.pet') for p in paths):
+        out.append(('ok', 'You and the automaton fighting together: your file has the "Pet" sets (Hybrid mode Pet). In the other Hybrid modes '
+                          '(Normal, DT) you fight as if alone, and automaton stats on gear count for nothing.'))
+    elif any(p.startswith('sets.idle.pet') for p in paths):
+        out.append(('warn', 'No engaged "Pet" set: when you fight next to the automaton you wear a set built for you alone.'))
+    return out
 
 
 def rename_text(fixes):

@@ -17,6 +17,7 @@ import job_guides
 import job_sets
 import real
 import pld
+import pup
 
 # ------------------------------------------------------------------ what a job is for (research: RESEARCH.md "Paladin, more guides (2026-11-10)")
 ROLE = {
@@ -132,6 +133,15 @@ def classify(loaded, job):
         if job == 'PLD' and pld.takes(p, job):
             f = pld.focus_for(p)
             row.update(group=_group_pld(f), focus=f, judge='pld', why=WHY.get(f, ''))
+        elif job == 'PUP' and pup.is_pet_set(p, job):
+            # (his request 2026-11-21: the automaton's sets, by what you and it are doing: pup.SITUATION)
+            f = pup.focus_for(p)
+            sit = pup.situation(p)
+            row.update(group=PUP_GROUP.get(sit, 'Automaton fighting, you standing'), focus=f, judge='pup', why=pup.SITUATION.get(sit, ''))
+        elif job == 'PUP' and p.startswith('sets.engaged') and not pup.is_pet_set(p, job):
+            row.update(group='You fighting, no automaton', judge='wsdist',
+                       why='You fighting with no automaton out (Godhands and the like): your own damage, judged by wsdist. Automaton stats on '
+                           'gear count for nothing here. "Open in Build a set".')
         elif p.startswith('sets.weapons'):
             row.update(group='Weapons', why='which weapons you fight with: kept as they are')
         elif job == 'PLD' and cov.get(p) == 'ws' or job != 'PLD' and ('.ws' in p.lower() or 'ws[' in p.lower()) and not job_sets.takes(p, job):
@@ -177,6 +187,11 @@ def _nuke(path, job):
         return None
 
 
+PUP_GROUP = {'standing': 'Automaton fighting, you standing', 'both': 'You and the automaton fighting', 'waiting': 'Automaton out, not fighting',
+             'ws': 'Automaton weapon skills and spells', 'spell': 'Automaton weapon skills and spells', 'enmity': 'Automaton weapon skills and spells',
+             'overdrive': 'Automaton fighting, you standing'}
+
+
 def focus_choices(row, job):
     """What he can pick under "It is for" for this set."""
     if row['judge'] == 'pld':
@@ -185,6 +200,8 @@ def focus_choices(row, job):
         return list(job_sets.FOCUS)
     if row['judge'] == 'idle':
         return list(idle.FOCUS)
+    if row['judge'] == 'pup':
+        return list(pup.FOCUS)
     return []
 
 
@@ -290,7 +307,7 @@ def need_for(row, focus, ctx):
 
 def judge(row, ctx, focus=None, build=True):
     """The result of one set (the judge's own dict, plus 'gain' (%), 'better' (a change worth writing), 'need'). None for a set not judged here."""
-    if row['judge'] not in ('pld', 'idle', 'job'):
+    if row['judge'] not in ('pld', 'idle', 'job', 'pup'):
         return None
     focus = focus or row['focus']
     need = need_for(row, focus, ctx)
@@ -307,6 +324,9 @@ def judge(row, ctx, focus=None, build=True):
         m0, m1 = r['now'], r['val']
     elif row['judge'] == 'idle':
         r = idle.judge(*a, need=need, focus=focus, build=build, keep_weapons=keep)
+        m0, m1 = r['now'], r['val']
+    elif row['judge'] == 'pup':
+        r = pup.judge(*a, need=need or None, focus=focus, build=build)
         m0, m1 = r['now'], r['val']
     else:
         r = job_sets.judge(*a, need=need, focus=focus, build=build, keep=keep)
@@ -326,7 +346,7 @@ def judge(row, ctx, focus=None, build=True):
 
 def analyze(rows, ctx, progress=None, stop=None):
     """Judge every set that is judged here (in place: row['r']). progress(i, n, path); stop() True = stop now."""
-    todo = [r for r in rows if r['judge'] in ('pld', 'idle', 'job')]
+    todo = [r for r in rows if r['judge'] in ('pld', 'idle', 'job', 'pup')]
     for i, row in enumerate(todo):
         if stop and stop():
             break
@@ -347,6 +367,8 @@ def words(row, r, which='now'):
         return pld.words(n, f)
     if row['judge'] == 'job':
         return job_sets.say(n, f)
+    if row['judge'] == 'pup':
+        return pup.words(n, f)
     return idle.words(n, r.get('base'))
 
 
@@ -355,6 +377,8 @@ def tip(row, r):
         return pld.advice(r['n_best'], r['focus'], r.get('idle_hp'))
     if row['judge'] == 'job':
         return job_sets.tip(r['n_best'], r['focus'])
+    if row['judge'] == 'pup':
+        return pup.advice(r['n_best'], r['focus'])
     return ''
 
 
@@ -397,6 +421,21 @@ def ideas(row, r, ctx, every, n=3):
             return job_sets.upgrade_ideas(r['best'], spec, every, ctx.counts, None, True, n, job=ctx.job)
         except Exception:
             return []
+    if row['judge'] == 'pup':
+        pool = [c for c in every if c['name'] not in (ctx.counts or {}) and any(k.startswith(('pet_', 'm_')) for k in c['stats'])]
+        v0, found = pup.value(r['best'], r['focus']), {}
+        for s in healing.SLOTS:
+            if s in ('main', 'sub', 'range'):
+                continue
+            for c in pool:
+                if not healing.fits(c, s) or healing.clash(r['best'], s, c):
+                    continue
+                g = dict(r['best'])
+                g[s] = c
+                d = pup.value(g, r['focus']) - v0
+                if d > 0.5 and d > found.get(c['name'], ('', 0))[1]:
+                    found[c['name']] = (s, d)
+        return [(s, nm, round(d, 1)) for nm, (s, d) in sorted(found.items(), key=lambda x: -x[1][1])[:n]]
     if row['judge'] != 'pld':
         return []
     floor = ctx.ihp if ctx.ihp and not r['focus'].startswith(pld.NO_FLOOR) else None
@@ -523,7 +562,7 @@ def _norm(p):
 
 def missing(loaded, job):
     """[{path, group, focus, judge, why, gear: {}, new: True}] for the sets the guides list that the file doesn't have."""
-    have = {_norm(s['path']) for s in loaded.sets}
+    have = {_norm(s['path']) for s in loaded.sets} | {_norm(a) for a in getattr(loaded, 'aliases', {})}
     job = (job or '').upper()
     out = []
     if job != 'PLD' and not job_guides.picks_by_name(loaded):
@@ -540,6 +579,12 @@ def missing(loaded, job):
         if job == 'PLD':
             out.append({'path': path, 'gear': {}, 'group': _group_pld(focus), 'focus': focus, 'judge': 'pld', 'new': True,
                         'why': f"Not in your file yet: {why}. " + WHY.get(focus, '')})
+        elif job == 'PUP':
+            if not any(_norm(x).startswith('sets.idle.pet.engaged') for x in have):
+                continue                    # (a file without automaton fighting sets doesn't use this way of naming them)
+            out.append({'path': path, 'gear': {}, 'group': PUP_GROUP['standing'], 'focus': focus, 'judge': 'pup', 'new': True,
+                        'why': f"Not in your file yet: {why}. Your file picks idle.Pet.Engaged.<mode> by the automaton's head and frame; without this "
+                               "set the mode wears the plain idle.Pet.Engaged. " + pup.SITUATION['standing']})
         else:
             out.append({'path': path, 'gear': {}, 'group': _group_job(focus, job, path), 'focus': focus, 'judge': 'job', 'new': True,
                         'why': f"Not in your file yet: {why}. " + (job_guides.why(job, focus) or (job_sets.FOCUS.get(focus) or {}).get('how', ''))})

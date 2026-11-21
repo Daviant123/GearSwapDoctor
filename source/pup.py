@@ -64,6 +64,8 @@ FOCUS = {
     'Tank': {'dt': 30, 'pdt': 26, 'mdt': 8, 'regen': 8, 'enmity': 5, 'haste': 6, 'hp': 0.05, 'acc': 0.2, 'att': 0.05, 'da': 1, 'lvl': 40, 'vit': 0.2},
     'Light tank': {'dt': 14, 'pdt': 12, 'mdt': 3, 'haste': 15, 'da': 4, 'ta': 6, 'acc': 0.3, 'att': 0.25, 'enmity': 2, 'regen': 3, 'lvl': 40},
     'Nuke': {'matk': 3, 'macc': 1, 'int': 0.5, 'refresh': 15, 'fast': 3, 'lvl': 40, 'dt': 1, 'haste': 1},
+    'Magic support': {'macc': 2, 'matk': 1, 'mnd': 0.6, 'int': 0.4, 'refresh': 15, 'fast': 3, 'lvl': 40, 'dt': 1, 'regen': 1, 'haste': 1},
+    'Pet enmity': {'enmity': 10, 'dt': 2, 'pdt': 2, 'mdt': 1, 'regen': 1, 'lvl': 10, 'hp': 0.02},
     'Heal': {'mnd': 1, 'macc': 0.4, 'refresh': 15, 'fast': 5, 'lvl': 40, 'dt': 2, 'regen': 2, 'hp': 0.02, 'haste': 1},
     'Weapon skill': {'wsd': 12, 'tpb': 0.06, 'att': 0.7, 'ratt': 0.7, 'acc': 0.5, 'racc': 0.4, 'str': 0.5, 'dex': 0.5, 'vit': 0.3, 'lvl': 60, 'crit': 3, 'da': 2},
     'Magic weapon skill': {'wsd': 10, 'tpb': 0.06, 'matk': 3, 'macc': 1, 'int': 0.5, 'mnd': 0.4, 'lvl': 60},
@@ -74,6 +76,54 @@ FOCUS = {
 BOTH = ('You and the pet', 'You and the pet, accuracy', 'Pet waiting')      # (where you're in it too: what keeps you alive stays)
 PET_WORDS = ('pet', 'petwsgear', 'overdrive', 'automaton', 'petenmitygear')
 
+# (his request 2026-11-21: "make sure the gsdoctor correctly accounts for the different types of modes that puppetmaster plays with the pupper and without
+# the pupper, and when the pupmaster is engaged vs not engaged"). His files (Selindrile's PUP.lua) pick the set like this:
+#   you standing, no automaton or it isn't fighting  sets.idle, sets.idle.Pet                        -> 'Pet waiting' (you), or idle.py (no pet)
+#   you standing, the automaton fighting             sets.idle.Pet.Engaged.<PetMode>                 -> the pet's job (Tank, Melee, Nuke ...)
+#   you and the automaton both fighting              sets.engaged.<OffenseMode>.Pet (HybridMode Pet) -> 'You and the pet'
+#   you fighting, no automaton                       sets.engaged, .Acc, .DT                         -> wsdist (not here)
+#   on top when the automaton has 1000 TP            sets.midcast.Pet.PetWSGear.<PetMode>            -> its weapon skill
+# PetMode comes from the frame and head (get_pet_mode in PUP.lua): Melee, Ranged, HybridRanged, Tank, LightTank, Magic, Heal, Nuke.
+MODES = {'tank': 'Tank', 'lighttank': 'Light tank', 'melee': 'Melee (fights)', 'ranged': 'Ranged (Sharpshot)', 'hybridranged': 'Ranged (Sharpshot)',
+         'magic': 'Magic support', 'heal': 'Heal', 'nuke': 'Nuke'}
+SITUATION = {
+    'standing': 'You stand back, the automaton fights: its stats are all that count (it holds the hate). Your own damage taken only matters if '
+                'something turns on you.',
+    'both': 'You and the automaton both fight (Hybrid mode "Pet"): your TP stats and its stats together, with your damage taken kept.',
+    'waiting': 'The automaton is out but not fighting: your own damage taken and Refresh, and its Regen.',
+    'ws': 'Worn on top only while the automaton has 1000+ TP, until it uses its weapon skill: what counts is the moment the weapon skill fires '
+          '(no game signal tells GearSwap that moment, so the files put it on at 1000 TP).',
+    'spell': 'Worn while the automaton casts a spell: its magic stats for that spell.',
+    'enmity': 'Worn on top just before the automaton\'s Provoke or Flashbulb is ready: its enmity.',
+    'overdrive': 'Worn on top during Overdrive: the automaton\'s melee stats.',
+}
+
+
+def situation(path):
+    """Which of the cases above a set is ('standing', 'both', 'waiting', 'ws', 'enmity', 'overdrive'), or None."""
+    w = _words(path)
+    if 'petwsgear' in w or 'weaponskill' in w or ('pet' in w and 'ws' in w):
+        return 'ws'
+    if 'petenmitygear' in w:
+        return 'enmity'
+    if w[1:2] == ['midcast'] and 'pet' in w:
+        return 'spell'
+    if 'overdrive' in w:
+        return 'overdrive'
+    if w[1:2] == ['engaged'] and ('pet' in w or 'masterpet' in w):
+        return 'both'
+    if w[1:2] == ['idle'] and 'pet' in w:
+        return 'standing' if 'engaged' in w else 'waiting'
+    return None
+
+
+def mode_of(path):
+    """The PetMode a set is named for (sets.idle.Pet.Engaged.Tank -> 'Tank'), or None."""
+    for x in reversed(_words(path)):
+        if x in MODES:
+            return MODES[x]
+    return None
+
 
 def _words(path):
     return [p.lower() for p in fixer._path_parts(path or '')]
@@ -83,11 +133,16 @@ def is_pet_set(path, job='PUP'):
     """A set that's about the automaton: judged here, not by wsdist."""
     if (job or '').upper() != 'PUP':
         return False
+    w = _words(path)
+    if w[1:3] == ['precast', 'ja']:                      # (sets.precast.JA.Overdrive is worn for the ability itself: a job ability set)
+        return False
     return any(w in PET_WORDS for w in _words(path)) or any(w == 'masterpet' for w in _words(path))
 
 
 def focus_for(path):
     w = _words(path)
+    if 'petenmitygear' in w:
+        return 'Pet enmity'
     midcast_ws = 'petwsgear' in w or 'weaponskill' in w or ('pet' in w and 'ws' in w) or any(x.startswith('wsftp') or x.startswith('wsnoftp') for x in w)
     if midcast_ws:
         return 'Magic weapon skill' if any(x in ('magic', 'nuke', 'heal') for x in w) else 'Weapon skill'
@@ -97,11 +152,13 @@ def focus_for(path):
         return 'Light tank'
     if 'tank' in w:
         return 'Tank'
-    if 'nuke' in w or 'magic' in w or 'elemental magic' in w or 'enfeebling magic' in w:
+    if 'nuke' in w or 'elemental magic' in w:
         return 'Nuke'
     if 'heal' in w:
         return 'Heal'
-    if 'ranged' in w or 'sharpshot' in w:
+    if 'magic' in w or 'enfeebling magic' in w:
+        return 'Magic support'
+    if 'ranged' in w or 'hybridranged' in w or 'sharpshot' in w:
         return 'Ranged (Sharpshot)'
     if w[1:2] == ['engaged'] or 'masterpet' in w:
         return 'You and the pet, accuracy' if any(x in ('acc', 'fullacc', 'mid', 'fodder') for x in w) else 'You and the pet'
@@ -182,6 +239,11 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     pool = [c for c in cands if any(k.startswith(('pet_', 'm_')) for k in c['stats']) or (focus in BOTH and any(c['stats'].get(k) for k in ('dt', 'pdt', 'mdt', 'dt2', 'pdt2', 'mdt2')))]
     notes = [f'judged for: {focus}', NOTE]
+    sit = situation(path)
+    if sit:
+        notes.append(SITUATION[sit])
+    if any(k.lower() in ('range', 'ranged') for k in set_gear):
+        notes.append('your Animator stays as it is: it makes the automaton')
     n0 = numbers(cur)
     if focus in BOTH and not need:                           # (his numbers, or at least what the set has now: like a TP set)
         need = {k: v for k, v in (('pdt', n0['m_dt']), ('mdt', n0['m_mdt'])) if v}
@@ -190,12 +252,14 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     v0 = value(cur, focus)
     out = {'cur': cur, 'best': cur, 'now': v0, 'val': v0, 'n_now': n0, 'n_best': n0, 'changes': {}, 'focus': focus, 'keep': True, 'notes': notes, 'short': 0}
     if build:
+        # (the Animator, in the range slot, is never offered: the builder doesn't touch that slot, and no source says it is safe to change with the
+        # automaton out)
         best, val, now = healing.build('pet', pool, cur, {}, job, sub, spell=focus, need=need or None, keep_weapons=True, counts=counts)
         out.update(best=best, val=val, now=now, n_best=numbers(best), changes=healing.changes(cur, best, True), short=healing.shortfall(healing.totals(best), need or None))
     return out
 
 
-def checked_sets(loaded, limit=8):
+def checked_sets(loaded, limit=30):
     """The automaton sets a check-up looks at, plainest first."""
     paths = [s for s in loaded.sets if is_pet_set(s['path'])]
     paths.sort(key=lambda s: (s['path'].count('.'), len(s['path'])))

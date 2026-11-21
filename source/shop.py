@@ -81,7 +81,7 @@ def collect(character, files, subs=None, items=None, data=None, progress=None, s
             if ld.error or not ld.sets:
                 continue
             cands, counts = doctor._owned_cands(ld, job, bags, items, real)
-            rows = [r for r in gear_opt.classify(ld, job) if r['judge'] in ('pld', 'job')]
+            rows = [r for r in gear_opt.classify(ld, job) if r['judge'] in ('pld', 'job', 'pup')]
             ctx = gear_opt.Ctx(ld, job, (subs or {}).get(job, 'WAR'), cands, counts, items, data)
             every = job_sets.all_candidates(job, items, data)
         except Exception:
