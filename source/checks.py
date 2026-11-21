@@ -124,6 +124,32 @@ def load_bags(character, steward_chars=None):
     for bag, items in t.bags.items():
         out[str(bag)] = {int(k): int(v) for k, v in items.items()} if items else {}
     out['_time'] = int(t.time or 0)
+    global LAST_AUGS
+    try:                                       # (the augments in the same file: wsdist_runner picks a weapon's rank by them, "Path: A" -> Tizona R15)
+        LAST_AUGS = _augs_of(t)
+    except Exception:
+        LAST_AUGS = {}
+    return out
+
+
+# {item id: [[augment, ...], ...]} of the character whose bags were read last (load_bags). wsdist_runner.plan_ws reads it: plan_ws is
+# always called right after load_bags for the same character, and has no character of its own.
+LAST_AUGS = {}
+
+
+def _augs_of(t):
+    out = {}
+    if t is None or t.augs is None:
+        return out
+    for bag, items in t.augs.items():
+        if str(bag) not in EQUIP_BAGS or not items:
+            continue
+        for iid, copies in items.items():
+            have = out.setdefault(int(iid), [])
+            for c in copies.values():
+                a = [str(x) for x in c.values()]
+                if a and a not in have:
+                    have.append(a)
     return out
 
 
@@ -139,18 +165,7 @@ def load_augments(character, steward_chars=None):
         t = lupa.LuaRuntime(unpack_returned_tuples=True).execute(open(path, encoding='utf-8').read())
     except Exception:
         return out
-    if t is None or t.augs is None:
-        return out
-    for bag, items in t.augs.items():
-        if str(bag) not in EQUIP_BAGS or not items:
-            continue
-        for iid, copies in items.items():
-            have = out.setdefault(int(iid), [])
-            for c in copies.values():
-                a = [str(x) for x in c.values()]
-                if a and a not in have:
-                    have.append(a)
-    return out
+    return _augs_of(t)
 
 
 def job_of(filename):

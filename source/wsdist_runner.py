@@ -9,6 +9,7 @@ one marked in wsdist as the usual one is assumed (the report says so).
 import contextlib
 import io
 import os
+import re
 import sys
 import threading
 
@@ -144,10 +145,33 @@ def gear_index():
     return _GIDX
 
 
+_RANK = re.compile(r' r(\d+) ?([a-d])?\b')
+
+
+def _by_path(entries, augments):
+    """The highest rank wsdist lists for an item whose augments name a path ("Path: A" on his Tizona: it's the ranked one, Tizona R15) - the
+    game shows the path, not the rank; the highest is assumed. None when the augments name no path or wsdist has no ranks for it."""
+    m = re.search(r'path: ?([a-d])\b', ' '.join(augments or ()).lower())
+    if not m:
+        return None
+    best = None
+    for e in entries:
+        r = _RANK.search(e['Name2'].lower()[len(e['Name']):] + ' ')
+        if r and (r.group(2) in (None, m.group(1))) and 'night' not in e['Name2'].lower():
+            if best is None or int(r.group(1)) > best[0]:
+                best = (int(r.group(1)), e)
+    return best[1] if best else None
+
+
 def pick_variant(entries, augments=None):
     """One wsdist entry for an owned item: the plain one, else the one whose augments look like the set's, else the
-    highest rank listed (R25 / R30 ...)."""
+    highest rank listed (R25 / R30 ...). An item whose augments name only a path ("Path: A", what the game shows on a ranked Ultimate Weapon)
+    is the highest rank of that path: plain Tizona is the unranked one (DMG 147), his has Path: A (Tizona R15, DMG 165) - found 2026-11-21."""
     plain = [e for e in entries if e['Name2'] == e['Name']]
+    if augments and plain:
+        ranked = _by_path(entries, augments)
+        if ranked is not None:
+            return ranked
     if plain:
         return plain[0]
     if augments:
@@ -156,6 +180,9 @@ def pick_variant(entries, augments=None):
             tail = e['Name2'][len(e['Name']):].strip().lower()       # e.g. "r25 b" / "path a"
             if tail and all(part in text for part in tail.replace('path', '').split()):
                 return e
+    ranked = _by_path(entries, augments)
+    if ranked is not None:
+        return ranked
     # (an "(night)" / "(day)" entry is the same item with time-of-day stats: use the one that always applies)
     allday = [e for e in entries if 'night' not in e['Name2'].lower()] or entries
     return sorted(allday, key=lambda e: e['Name2'])[-1]
@@ -636,6 +663,44 @@ def entries_for(name, items, index):
     return None
 
 
+_TPB = None
+
+
+def builtin_tp_bonus(name, items):
+    """True when the TP Bonus is in the item's own text (Aeonic weapons, Lycurgos): BG Wiki's TP Bonus page - only a TP Bonus *augment* counts
+    from the off hand ("Equipping Aeneas in the offhand will not grant TP Bonus"; Sequence's page says the same). Thibron, Centovente, Ukaldi,
+    Fernagu, Hitaki have theirs as an augment: their text has none, and they work in the off hand. Checked 2026-11-21."""
+    global _TPB
+    if _TPB is None:
+        _TPB = set()
+        try:
+            text = open(os.path.join(paths.WINDOWER or '', 'res', 'item_descriptions.lua'), encoding='utf-8', errors='replace').read()
+            for m in re.finditer(r'\[(\d+)\]\s*=\s*\{id=\d+,en="([^\n]*?)",ja=', text):
+                if 'tp bonus' in m.group(2).lower():
+                    _TPB.add(int(m.group(1)))
+        except OSError:
+            pass
+    return any(it['id'] in _TPB for it in items.find(name) if it['en'].lower() == (name or '').lower())
+
+
+def off_hand(entry, items):
+    """The wsdist entry as it works in the sub slot: a built-in TP Bonus doesn't count there (wsdist counts it anyway)."""
+    if entry and entry.get('TP Bonus') and builtin_tp_bonus(entry['Name'], items):
+        entry = dict(entry, **{'TP Bonus': 0})
+    return entry
+
+
+def _bag_augs(name, items):
+    """The augments Steward saw on his copy of an item (checks.LAST_AUGS), for a set that names none."""
+    import checks
+    for it in items.find(name):
+        if it['en'].lower() == (name or '').lower():
+            got = checks.LAST_AUGS.get(it['id'])
+            if got:
+                return got[0]
+    return None
+
+
 def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_where=None, file_range=False):
     """Everything for one weapon skill set: the options per slot (owned, this job, known to wsdist), the current set
     as wsdist sees it, locked slots (the weapon, items wsdist doesn't know). Returns (owned, current, notes)."""
@@ -650,7 +715,7 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
             continue
         ents = entries_for(g['name'], items, index)
         if ents:
-            current[slot] = pick_variant(ents, g.get('augments'))
+            current[slot] = pick_variant(ents, g.get('augments') or _bag_augs(g['name'], items))
         else:
             locked.add(slot)
             notes.append(f"{g['name']} ({gs}) isn't in wsdist: kept as it is")
@@ -661,11 +726,11 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
             main = wg.get('main')
             ents = main and entries_for(main['name'], items, index)
             if ents and (ws is None or pick_variant(ents).get('Skill Type') == skill):
-                current['main'] = pick_variant(ents)
+                current['main'] = pick_variant(ents, main.get('augments') or _bag_augs(main['name'], items))
                 subg = wg.get('sub')
                 se = subg and entries_for(subg['name'], items, index)
                 if se:
-                    current['sub'] = pick_variant(se)
+                    current['sub'] = pick_variant(se, subg.get('augments') or _bag_augs(subg['name'], items))
                 notes.append(f"weapon from {wname}: {main['name']}" + (f" / {subg['name']}" if se else ''))
                 break
     if 'main' not in current and skill:
@@ -676,7 +741,7 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
             ents = it and entries_for(it['en'], items, index)
             if not ents:
                 continue
-            e = pick_variant(ents)
+            e = pick_variant(ents, (checks.LAST_AUGS.get(iid) or [None])[0])
             if e.get('Skill Type') == skill and job.lower() in e['Jobs'] and e.get('Type') == 'Weapon':
                 if best is None or (e.get('DMG', 0), e['Name']) > (best.get('DMG', 0), best['Name']):
                     best = e
@@ -694,6 +759,8 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
                     current['main'] = e
             if stage < 4:
                 notes.append(f"{main['Name']}: your stage {stage} is judged as stage IV, the lowest wsdist has")
+    if 'sub' in current:
+        current['sub'] = off_hand(current['sub'], items)
     locked |= {'main', 'sub', 'ranged'}                     # weapons are GearSwap's weapon sets' business
     if job_rules.lock_ammo(job, set_gear, file_range):      # (ammo that isn't a bullet takes a COR's gun off: wsdist can't see a gun his sets don't name)
         locked.add('ammo')
@@ -705,7 +772,7 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
         ents = entries_for(it['en'], items, index)
         if not ents:
             continue
-        e = pick_variant(ents)
+        e = pick_variant(ents, (checks.LAST_AUGS.get(iid) or [None])[0])
         if job.lower() not in e['Jobs']:
             continue
         for slot in SLOT_MAP.values():

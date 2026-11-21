@@ -43,6 +43,7 @@ import cleanup  # noqa: E402
 import gsd_enemies  # noqa: E402
 import job_guides  # noqa: E402
 import ws_all   # noqa: E402
+import next_up  # noqa: E402
 import pup      # noqa: E402
 import real     # noqa: E402
 import real_fights  # noqa: E402
@@ -62,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.38.0'
+VERSION = '2.39.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -552,6 +553,7 @@ class App(tk.Tk):
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
         self._start_tab()
         self._optimize_tab()
+        self._next_tab()
         self._features_tab()
         self._create_tab()
         self._healing_tab()
@@ -2226,6 +2228,449 @@ class App(tk.Tk):
 
     def _opt_job(self):
         return checks.job_of(self.opt_file.get() or '') or ''
+
+    # ------------------------------------------------------------------ What next? (his request 2026-11-21: "the logical path forward to increasing
+    # the dps output" from all of his gear and all the gear in the game, then "build this and figure out how to do it for healing and pets"). next_up.py
+    def _next_tab(self):
+        tab = ttk.Frame(self.nb, padding=8)
+        self.tab_next = tab
+        self.nb.add(tab, text='★ What next?')
+        bar = ttk.Frame(tab)
+        bar.pack(fill='x')
+        ttk.Label(bar, text='File').pack(side='left')
+        self.nx_file = SearchCombo(bar, state='readonly', width=26)
+        self.nx_file.pack(side='left', padx=4)
+        self.nx_file.bind('<<ComboboxSelected>>', lambda e: self.nx_load())
+        ttk.Label(bar, text='Sub job').pack(side='left', padx=(8, 0))
+        self.nx_sub = SearchCombo(bar, values=JOBS, state='readonly', width=5)
+        self.nx_sub.pack(side='left', padx=4)
+        self.nx_sub.bind('<<ComboboxSelected>>', lambda e: self.nx_load(keep_sub=True))
+        self.nx_stop_btn = ttk.Button(bar, text='Stop', command=self._nx_stop, state='disabled')
+        self.nx_stop_btn.pack(side='left', padx=(10, 0))
+        self.nx_status = ttk.Label(bar, text='', foreground='#555')
+        self.nx_status.pack(side='left', padx=8)
+        self.nx_basis = ttk.Label(tab, text='', foreground='#777')
+        self.nx_basis.pack(anchor='w', pady=(4, 0))
+        nb = ttk.Notebook(tab)
+        nb.pack(fill='both', expand=True, pady=(6, 0))
+        self.nx_nb = nb
+
+        # 1. which weapons and weapon skill
+        p1 = ttk.Frame(nb, padding=6)
+        nb.add(p1, text='1. Weapons and weapon skill')
+        b1 = ttk.Frame(p1)
+        b1.pack(fill='x')
+        self.nx_cmp_btn = ttk.Button(b1, text='Compare every weapon', style='Big.TButton', command=self.nx_compare)
+        self.nx_cmp_btn.pack(side='left')
+        ToolTip(self.nx_cmp_btn, "Every main hand (yours, and the strongest of each kind you don't have) with every off hand and the job's weapon skills: "
+                                 "damage per second with your file's sets, then the best few rebuilt from your gear. A few minutes.")
+        ttk.Label(b1, text='Double-click a row to plan its upgrades (page 3).', foreground='#777').pack(side='left', padx=10)
+        self.nx_cmp = self._nx_tree(p1, (('#0', 'Main hand', 170), ('off', 'Off hand', 170), ('ws', 'Weapon skill', 150), ('dps', 'Damage / second', 120),
+                                          ('have', 'Yours?', 70), ('note', 'Notes', 330)))
+        self.nx_cmp.bind('<Double-1>', lambda e: self._nx_pick_from(self.nx_cmp))
+
+        # 2. the off hand
+        p2 = ttk.Frame(nb, padding=6)
+        nb.add(p2, text='2. Off hand')
+        b2 = ttk.Frame(p2)
+        b2.pack(fill='x')
+        ttk.Label(b2, text='Main hand').pack(side='left')
+        self.nx_main2 = SearchCombo(b2, width=22)
+        self.nx_main2.pack(side='left', padx=4)
+        self.nx_main2.bind('<<ComboboxSelected>>', lambda e: self._nx_ws_for(self.nx_main2, self.nx_ws2))
+        ttk.Label(b2, text='Weapon skill').pack(side='left', padx=(8, 0))
+        self.nx_ws2 = SearchCombo(b2, width=20)
+        self.nx_ws2.pack(side='left', padx=4)
+        self.nx_off_btn = ttk.Button(b2, text='Find the best off hand', style='Big.TButton', command=self.nx_offhand)
+        self.nx_off_btn.pack(side='left', padx=8)
+        ToolTip(self.nx_off_btn, "Every off hand worth trying (yours and the game's strongest). Only a TP Bonus augment works in the off hand (Thibron, "
+                                 "Centovente ...): an Aeonic's built-in TP Bonus (Sequence) counts for nothing there (BG Wiki).")
+        self.nx_off = self._nx_tree(p2, (('#0', 'Off hand', 200), ('dps', 'Damage / second', 120), ('tpb', 'TP Bonus there', 110), ('have', 'Yours?', 70),
+                                         ('note', 'Notes', 420)))
+
+        # 3. the upgrade path
+        p3 = ttk.Frame(nb, padding=6)
+        nb.add(p3, text='3. Upgrade path')
+        b3 = ttk.Frame(p3)
+        b3.pack(fill='x')
+        ttk.Label(b3, text='Main').pack(side='left')
+        self.nx_main3 = SearchCombo(b3, width=20)
+        self.nx_main3.pack(side='left', padx=4)
+        self.nx_main3.bind('<<ComboboxSelected>>', lambda e: self._nx_ws_for(self.nx_main3, self.nx_ws3))
+        ttk.Label(b3, text='Off').pack(side='left', padx=(6, 0))
+        self.nx_off3 = SearchCombo(b3, width=18)
+        self.nx_off3.pack(side='left', padx=4)
+        ttk.Label(b3, text='Weapon skill').pack(side='left', padx=(6, 0))
+        self.nx_ws3 = SearchCombo(b3, width=18)
+        self.nx_ws3.pack(side='left', padx=4)
+        self.nx_path_btn = ttk.Button(b3, text='Find my upgrade path', style='Big.TButton', command=self.nx_path)
+        self.nx_path_btn.pack(side='left', padx=8)
+        ToolTip(self.nx_path_btn, "Your best weapon skill and fighting sets from your own gear, then from every item wsdist knows. Each new piece: the damage "
+                                  "per second it adds on its own, biggest first, and where it comes from (double-click: its BG Wiki page). 2-3 minutes.")
+        self.nx_sum = ttk.Label(p3, text='', wraplength=1100, justify='left')
+        self.nx_sum.pack(anchor='w', pady=(6, 2))
+        self.nx_up = self._nx_tree(p3, (('#0', '#', 40), ('get', 'Get', 210), ('use', 'Where it goes (in place of)', 330), ('dps', 'Damage / second', 110),
+                                        ('from', 'Where it comes from', 380)))
+        self.nx_up.bind('<Double-1>', lambda e: self._nx_wiki(self.nx_up))
+        b3b = ttk.Frame(p3)
+        b3b.pack(fill='x', pady=(4, 0))
+        self.nx_write_btn = ttk.Button(b3b, text='Write my best sets (from my gear)', command=self.nx_write, state='disabled')
+        self.nx_write_btn.pack(side='left')
+        ToolTip(self.nx_write_btn, 'Writes the weapon skill set and the fighting set built from your own gear into the file: shows every change, '
+                                   'asks first, backup first. Weapons stay as they are.')
+
+        # 4. cures and pets
+        p4 = ttk.Frame(nb, padding=6)
+        nb.add(p4, text='4. Cures and pets')
+        b4 = ttk.Frame(p4)
+        b4.pack(fill='x')
+        self.nx_heal_btn = ttk.Button(b4, text='Look at the cure and pet sets', style='Big.TButton', command=self.nx_heal)
+        self.nx_heal_btn.pack(side='left')
+        ToolTip(self.nx_heal_btn, "wsdist knows no cures or pets, so these use the Doctor's own judges: cures by the game's formulas (HP healed), the wyvern's "
+                                  "breath by BG Wiki's formula (% breath damage, about), automaton, avatar, jug pet and luopan sets by the researched weights "
+                                  "(points). Each set: now, the best from your gear, and the pieces you don't have that add the most.")
+        ttk.Label(b4, text='Double-click an item: its BG Wiki page.', foreground='#777').pack(side='left', padx=10)
+        self.nx_hl = self._nx_tree(p4, (('#0', 'Set / item', 330), ('now', 'Now', 120), ('best', 'Best from your gear', 150), ('unit', 'In', 120),
+                                        ('more', 'Adds', 90), ('from', 'Where it comes from', 330)))
+        self.nx_hl.bind('<Double-1>', lambda e: self._nx_wiki(self.nx_hl))
+        self.nx_paths, self.nx_ld, self.nx_path_v, self._nx_busy, self._nx_stopping = {}, None, None, False, False
+        self.nx_wiki = {}
+
+    def _nx_tree(self, parent, cols):
+        fr = ttk.Frame(parent)
+        fr.pack(fill='both', expand=True, pady=(6, 0))
+        t = ttk.Treeview(fr, columns=[c for c, _h, _w in cols[1:]], show='tree headings')
+        for c, h, w in cols:
+            t.heading(c, text=h)
+            t.column(c, width=w, anchor='w')
+        sb = ttk.Scrollbar(fr, orient='vertical', command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        return t
+
+    def nx_fill_files(self):
+        self.nx_paths = {os.path.basename(f): f for f in doctor.files_for(self.who.get())}
+        names = list(self.nx_paths)
+        self.nx_file.configure(values=names)
+        if self.nx_file.get() not in names:
+            self.nx_file.set((names or [''])[0])
+        self.nx_load()
+
+    def _nx_job(self):
+        return checks.job_of(self.nx_file.get() or '') or ''
+
+    def nx_load(self, keep_sub=False):
+        if self._nx_busy:
+            return
+        job = self._nx_job()
+        if not keep_sub:
+            self.nx_sub.set(self.cfg['subs'].get(job, 'WAR'))
+        path = self.nx_paths.get(self.nx_file.get())
+        self.nx_ld = None
+        for t in (self.nx_cmp, self.nx_off, self.nx_up, self.nx_hl):
+            t.delete(*t.get_children())
+        self.nx_sum.config(text='')
+        self.nx_write_btn.config(state='disabled')
+        self.nx_basis.config(text=(f"Judged on: {self.cfg.get('enemy', 'Apex Toad')}, weapon skills at {self.cfg.get('ws_tp', 1000)} TP, "
+                                   f"{W.buff_text(self.cfg.get('buffs', 'party')) if self.ws_ready else 'party buffs'} (Settings tab). wsdist's numbers: "
+                                   "the order is good, the exact damage isn't checked against the game yet."))
+        if not path:
+            self.nx_status.config(text='No GearSwap files for this character.')
+            return
+        try:
+            self.nx_ld = self.loaded_file(path)
+        except Exception as e:
+            self.nx_status.config(text=f'Could not read the file: {e}')
+            return
+        self.nx_status.config(text='')
+        self._nx_weapon_lists()
+
+    def _nx_ctx(self):
+        """(job, sub, his item ids, items, gear index) - his bags read again (and the augments with them)."""
+        if self.items is None:
+            self.items = checks.Items()
+        ids, _ = next_up.owned(self.who.get())
+        return self._nx_job(), self.nx_sub.get() or 'WAR', ids, self.items, W.gear_index()
+
+    def _nx_weapon_lists(self):
+        if not self.ws_ready:
+            return
+        try:
+            job, sub, ids, items, idx = self._nx_ctx()
+            mains = next_up.weapons(job, items, idx, ids, top=2)
+            offs = next_up.weapons(job, items, idx, ids, off=True, top=2) if next_up.can_dual(job, sub) else []
+        except Exception:
+            return
+        ml = [w['name'] for w in mains]
+        ol = ['(nothing)'] + [w['name'] for w in offs]
+        for box in (self.nx_main2, self.nx_main3):
+            box.configure(values=ml)
+            if box.get() not in ml:
+                box.set(ml[0] if ml else '')
+        self.nx_off3.configure(values=ol)
+        if self.nx_off3.get() not in ol:
+            self.nx_off3.set(ol[1] if len(ol) > 1 else ol[0])
+        self._nx_ws_for(self.nx_main2, self.nx_ws2)
+        self._nx_ws_for(self.nx_main3, self.nx_ws3)
+
+    def _nx_ws_for(self, main_box, ws_box):
+        try:
+            job, _sub, _ids, items, idx = self._nx_ctx()
+            lst = next_up.weapon_skills(job, main_box.get(), self.nx_ld, items, idx) if self.nx_ld else []
+        except Exception:
+            lst = []
+        ws_box.configure(values=lst)
+        if ws_box.get() not in lst:
+            ws_box.set(lst[0] if lst else '')
+
+    def _nx_judging(self):
+        b = W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), 'auto')
+        return self.cfg.get('enemy', 'Apex Toad'), int(self.cfg.get('ws_tp', 1000) or 1000), b
+
+    def _nx_run(self, what, work, done):
+        """work() in the background (Stop asks it to stop), then done(result) here."""
+        if self._nx_busy:
+            return
+        if not self.ws_ready:
+            messagebox.showinfo('GearSwap Doctor', 'wsdist is still loading - try again in a moment.')
+            return
+        if self.nx_ld is None:
+            self.nx_status.config(text='Pick a GearSwap file first.')
+            return
+        self._nx_busy, self._nx_stopping = True, False
+        for b in (self.nx_cmp_btn, self.nx_off_btn, self.nx_path_btn, self.nx_heal_btn):
+            b.config(state='disabled')
+        self.nx_stop_btn.config(state='normal')
+        self.nx_status.config(text=what + ' ...')
+
+        def go():
+            try:
+                res, err = work(), None
+            except Exception as e:
+                res, err = None, e
+            self.after(0, lambda: finish(res, err))
+
+        def finish(res, err):
+            self._nx_busy = False
+            for b in (self.nx_cmp_btn, self.nx_off_btn, self.nx_path_btn, self.nx_heal_btn):
+                b.config(state='normal')
+            self.nx_stop_btn.config(state='disabled')
+            if err is not None:
+                self.nx_status.config(text=f'Could not finish: {err}')
+                return
+            done(res)
+            if self._nx_stopping:
+                self.nx_status.config(text=self.nx_status.cget('text') + ' (stopped)')
+        threading.Thread(target=go, daemon=True).start()
+
+    def _nx_stop(self):
+        self._nx_stopping = True
+        self.nx_status.config(text='Stopping after this one ...')
+
+    def _nx_say(self, m):
+        self.after(0, lambda: self.nx_status.config(text=m))
+
+    def nx_compare(self):
+        job, sub, ids, items, idx = self._nx_ctx()
+        enemy, tp, buffs = self._nx_judging()
+        ld = self.nx_ld
+
+        def work():
+            return next_up.setups(job, sub, ld, ids, items, idx, enemy, tp, buffs, progress=self._nx_say, stop=lambda: self._nx_stopping)
+
+        def done(rows):
+            t = self.nx_cmp
+            t.delete(*t.get_children())
+            for r in rows:
+                if r.get('error'):
+                    t.insert('', 'end', text=r['main'], values=(r['off'] or '-', r['ws'], '', '', 'wsdist could not: ' + r['error']))
+                    continue
+                t.insert('', 'end', text=r['main'], values=(r['off'] or '-', r['ws'], f"{r['dps']:,.0f}", 'yes' if r['owned'] else 'no',
+                                                            ('best sets from your gear' if r['built'] else "your file's sets") +
+                                                            ('; ' + r['note'] if r.get('note') else '')))
+            best = next((r for r in rows if not r.get('error')), None)
+            self.nx_status.config(text=(f"Best: {best['main']}{' / ' + best['off'] if best['off'] else ''} with {best['ws']}, {best['dps']:,.0f} "
+                                        "damage per second" if best else 'Nothing to compare: wsdist knows none of these weapons.'))
+        self._nx_run('Comparing weapons', work, done)
+
+    def _nx_pick_from(self, t):
+        sel = t.selection()
+        if not sel:
+            return
+        main = t.item(sel[0], 'text')
+        off, ws = t.item(sel[0], 'values')[:2]
+        self.nx_main3.set(main)
+        self._nx_ws_for(self.nx_main3, self.nx_ws3)
+        self.nx_ws3.set(ws)
+        self.nx_off3.set(off if off != '-' else '(nothing)')
+        self.nx_nb.select(2)
+
+    def nx_offhand(self):
+        job, sub, ids, items, idx = self._nx_ctx()
+        enemy, tp, buffs = self._nx_judging()
+        main, ws, ld = self.nx_main2.get(), self.nx_ws2.get(), self.nx_ld
+        if not main or not ws:
+            self.nx_status.config(text='Pick a main hand and a weapon skill.')
+            return
+
+        def work():
+            return next_up.off_hands(job, sub, main, ws, ld, ids, items, idx, enemy, tp, buffs, progress=self._nx_say, stop=lambda: self._nx_stopping)
+
+        def done(rows):
+            t = self.nx_off
+            t.delete(*t.get_children())
+            for r in rows:
+                if r.get('error'):
+                    t.insert('', 'end', text=r['off'], values=('', '', '', 'wsdist could not: ' + r['error']))
+                    continue
+                t.insert('', 'end', text=r['off'], values=(f"{r['dps']:,.0f}", f"+{r['tpb']}" if r['tpb'] else '-', 'yes' if r['owned'] else 'no',
+                                                           r.get('note', '')))
+            ok = [r for r in rows if not r.get('error')]
+            self.nx_status.config(text=f"Best off hand with {main} and {ws}: {ok[0]['off']}" if ok else 'No off hand to try.')
+        self._nx_run('Trying every off hand', work, done)
+
+    def nx_path(self):
+        job, sub, ids, items, idx = self._nx_ctx()
+        enemy, tp, buffs = self._nx_judging()
+        main, ws, ld = self.nx_main3.get(), self.nx_ws3.get(), self.nx_ld
+        off = self.nx_off3.get()
+        off = None if off in ('', '(nothing)') else off
+        if not main or not ws:
+            self.nx_status.config(text='Pick a main hand and a weapon skill.')
+            return
+
+        def work():
+            p = next_up.path(job, sub, main, off, ws, ld, ids, items, idx, enemy, tp, buffs, progress=self._nx_say, stop=lambda: self._nx_stopping)
+            if p:
+                p['file'] = next_up.judge(job, sub, main, off, ws, ld, ids, items, idx, enemy, tp, buffs)['dps']
+            return p
+
+        def done(p):
+            t = self.nx_up
+            t.delete(*t.get_children())
+            self.nx_wiki = {}
+            self.nx_path_v = (p, job, main, off, ws)
+            if not p:
+                return
+            pct = (p['best'] / p['base'] - 1) * 100 if p['base'] else 0
+            self.nx_sum.config(text=(f"{main}{' / ' + off if off else ''}, {ws}: your file {p['file']:,.0f} damage per second; the best your gear can do "
+                                     f"{p['base']:,.0f}; the best from every item in the game {p['best']:,.0f} (+{pct:.0f} %). Below: each new piece "
+                                     "alone, biggest first."))
+            n = 0
+            for e in p['steps']:
+                n += 1
+                use = '; '.join(f"{w.lower()} set, {gs}" + (f" ({was})" if was else '') for w, gs, was, _g in e['uses'])
+                row = t.insert('', 'end', text=str(n), values=(e['name'] + ('  (you have it)' if e['yours'] else ''), use, f"+{e['gain']:,.0f}",
+                                                               e.get('how', '')))
+                self.nx_wiki[row] = e.get('wiki')
+            g = p['group']
+            if g and g['names']:
+                t.insert('', 'end', text='+', values=('Together: ' + ', '.join(g['names']), 'fighting set: each alone is a loss (Dual Wield / haste '
+                                                      'balance)', f"{g['gain']:+,.0f}", 'get them as a group'))
+            self.nx_write_btn.config(state='normal' if p['own'] else 'disabled')
+            self.nx_status.config(text=f"{len(p['steps'])} upgrades found. Double-click one for its BG Wiki page.")
+        self._nx_run('Building your best sets, then the best from every item', work, done)
+
+    def _nx_wiki(self, t):
+        sel = t.selection()
+        url = sel and self.nx_wiki.get(sel[0])
+        if url:
+            import webbrowser
+            webbrowser.open(url)
+
+    def nx_write(self):
+        """His best sets from his own gear into the file (the weapon skill's own set, or a new one; the main fighting set)."""
+        if not self.nx_path_v or not self.nx_path_v[0]:
+            return
+        p, job, main, off, ws = self.nx_path_v
+        ld = self.nx_ld
+        path = self.nx_paths.get(self.nx_file.get())
+        items = self.items
+        var = ws_all._variants(ld)
+        edits = []
+        have = ws_all._sets_by_ws(ld, W.ws_list())
+
+        def gs_of(best):
+            return {W.GS_SLOT[k]: ws_all.gs_value(v, items, var) for k, v in best.items()
+                    if W.GS_SLOT.get(k) not in ('main', 'sub', 'range', None) and v.get('Name') != 'Empty'}
+        wsg = gs_of(p['own']['ws_set'])
+        if ws in have:
+            cur = {k.lower(): (g['name'] if isinstance(g, dict) else g) for k, g in have[ws]['gear'].items()}
+            ch = {k: v for k, v in wsg.items() if fixer.item_text(v) != fixer.item_text(cur.get(k, ''))}
+            if ch:
+                edits.append(('slots', have[ws]['path'], ch))
+        else:
+            base = next_up.ws_base(ld) or 'sets.precast.WS'
+            edits.append(('new', f'{base}["{ws}"]', wsg, [s['path'] for s in ld.sets]))
+        tpp = next_up.tp_path(ld)
+        if tpp:
+            cur = {k.lower(): (g['name'] if isinstance(g, dict) else g) for k, g in next_up._gear(ld, tpp).items()}
+            ch = {k: v for k, v in gs_of(p['own']['tp_set']).items() if fixer.item_text(v) != fixer.item_text(cur.get(k, ''))}
+            if ch:
+                edits.append(('slots', tpp, ch))
+        if not edits:
+            self.nx_status.config(text='Your sets are already the best your gear makes.')
+            return
+        if self._apply({path: edits}) is not False:
+            self.nx_status.config(text='Written (a backup was made first). In game: //gs reload.')
+            self.nx_load()
+
+    def nx_heal(self):
+        """The cure and pet sets of the file: now, the best from his gear, and what to get (gear_opt's judges)."""
+        import gear_opt
+        if self.nx_ld is None:
+            self.nx_status.config(text='Pick a GearSwap file first.')
+            return
+        job, sub = self._nx_job(), self.nx_sub.get() or 'WAR'
+        ld = self.nx_ld
+        if self.items is None:
+            self.items = checks.Items()
+        if self._heal_data is None:
+            self._heal_data = healing.ItemData()
+        items, data = self.items, self._heal_data
+        who = self.who.get()
+
+        def work():
+            bags = checks.load_bags(who) or {}
+            cands, counts = doctor._owned_cands(ld, job, bags, items, checks.load_augments(who))
+            ctx = gear_opt.Ctx(ld, job, sub, cands, counts, items, data)
+            every = job_sets.all_candidates(job, items, data)
+            rows = [r for r in gear_opt.classify(ld, job) if next_up.is_care(r)]
+            out = []
+            for i, r in enumerate(rows):
+                if self._nx_stopping:
+                    break
+                self._nx_say(f"{i + 1} / {len(rows)}: {r['path'][5:]}")
+                try:
+                    res, ideas = next_up.set_path(r, ctx, every)
+                except Exception as e:
+                    out.append((r, None, [], str(e)))
+                    continue
+                out.append((r, res, ideas, None))
+            return out
+
+        def done(out):
+            t = self.nx_hl
+            t.delete(*t.get_children())
+            self.nx_wiki = {}
+            for r, res, ideas, err in out:
+                if err or not res:
+                    t.insert('', 'end', text=r['path'][5:], values=('', '', '', '', err or 'not judged'))
+                    continue
+                u = next_up.unit(r, res)
+                row = t.insert('', 'end', text=f"{r['path'][5:]}  ({res.get('focus') or r.get('focus')})",
+                               values=(f"{res['now']:,.1f}", f"{res['val']:,.1f}", u, '', ''), open=bool(ideas))
+                for slot, name, more in ideas:
+                    hit = self.items.find(name)
+                    how, wiki = shop.how(hit[0], job) if hit else ('', '')
+                    c = t.insert(row, 'end', text=f'      {slot}: {name}', values=('', '', '', f'+{more:,.1f}', how))
+                    self.nx_wiki[c] = wiki
+            if not out:
+                self.nx_status.config(text='This file has no cure or pet sets the Doctor judges.')
+            else:
+                self.nx_status.config(text=f'{len(out)} cure / pet sets. "Now" and "Best" in the unit shown; under each: what to get.')
+        self._nx_run('Judging the cure and pet sets', work, done)
 
     def opt_load(self, keep_sub=False):
         """The file's sets, what each is for, who judges it (nothing built yet: that's "Look at every set")."""
@@ -5531,6 +5976,7 @@ class App(tk.Tk):
         self.feat_fill_files()
         self.heal_fill_files()
         self.opt_fill_files()
+        self.nx_fill_files()
         self.prog_fill_jobs()
         self.fill_overview()
         self.fill_problems()

@@ -65,7 +65,23 @@ def parse(text):
         out['aquaveil'] = 1
     if 'Enhances "Fast Cast" effect' in own and 'fast' not in healing.parse_text(text):      # (90 older pieces give no number: Loquac. Earring ...)
         out['fast'] = 2
+    # the wyvern's lines come after "Wyvern:" (cut above): read from the whole text (Dragoon breath sets, his request 2026-11-21)
+    for k, rx in WYVERN_RX:
+        n = sum(int(y) for x in rx.findall(text) for y in (x if isinstance(x, tuple) else (x,)) if y)
+        if n:
+            out[k] = n
+    if "enhances effect of wyvern's breath" in text.lower() or 'increases breath damage' in own.lower():
+        out['breath_enh'] = 1
     return out
+
+
+# Wyvern breath (BG Wiki "Wyvern (Dragoon Pet)", read 2026-11-21): elemental breath = floor(floor(current HP / 6 + 15 + JP x 10) x (1 + Enhances / 256))
+# x (1 + Breath+ / 100 + Deep Breathing); Healing Breath also grows with the wyvern's HP. "Enhances Breath" gear tops out at 96/256 (May 2025).
+WYVERN_RX = [(k, re.compile(rx)) for k, rx in [
+    ('wyv_hp', r'Wyvern: HP ?\+(\d+)(?!\d*%)'), ('wyv_hp_pct', r'Wyvern: HP ?\+(\d+)%'), ('wyv_lvl', r'Wyvern: Lv\. ?\+(\d+)'),
+    ('breath_plus', r'(?:Wyvern: )?Breath ?\+(\d+)(?!%)'),
+]]
+WYVERN_HP = 1640               # (a level 99 wyvern's HP, about: what 1 HP is worth, ~0.06 % breath damage each)
 
 
 # "Enhances Fast Cast effect" with no number: BG Wiki's values where they differ from the 2 % counted for the rest
@@ -259,6 +275,13 @@ FOCUS = {
     'Ready: magic': {'pts': {'pet_matk': 3, 'pet_macc': 1.5, 'pet_lvl': 40, 'ready_tp': 0.05}, 'show': ['pet_matk', 'pet_macc'],
                      'how': 'Pet: Magic Atk. Bonus, magic accuracy, level.'},
     'Ready recast': {'pts': {'ready_delay': 20, 'phys': 0.2, 'magic': 0.2}, 'show': ['ready_delay'], 'how': 'Ready / Sic recast down.'},
+    # (points = % breath damage, about: 1 wyvern HP = 100 / (HP + 90) %, HP +10 % = that x 164, Breath+ 1 = about 0.5 %, a level = about 9 HP;
+    # "Enhances effect of wyvern's breath" gives no number in its text: counted as 8/256, about 3 %, until a page gives the piece's own)
+    'Wyvern breath': {'pts': {'wyv_hp': 100 / (WYVERN_HP + 90), 'wyv_hp_pct': WYVERN_HP / (WYVERN_HP + 90), 'wyv_lvl': 900 / (WYVERN_HP + 90),
+                              'breath_plus': 0.5, 'breath_enh': 3.1, 'phys': 0.05, 'magic': 0.05},
+                      'show': ['wyv_hp', 'wyv_hp_pct', 'breath_plus', 'breath_enh'],
+                      'how': ("Wyvern breath (BG Wiki): grows with the wyvern's current HP (HP / 6), \"Enhances breath\" gear (to 96/256) and Breath+. "
+                              "Healing Breath heals more with more wyvern HP too. In % breath damage, about.")},
     'Geocolure': {'pts': {'geomancy': 30, 'geo_skill': 2, 'bell': 2, 'conserve': 0.5, 'fast': 0.1}, 'show': ['geomancy', 'geo_skill', 'bell'],
                   'how': 'Geomancy +n (Dunna, Idris) and Geomancy / Handbell skill (Luopan potency grows with it, to 900 in all).'},
     'Indicolure': {'pts': {'geomancy': 30, 'indi_dur': 3, 'geo_skill': 2, 'bell': 2, 'conserve': 0.3}, 'show': ['geomancy', 'indi_dur', 'geo_skill'],
@@ -323,6 +346,7 @@ LABEL = {'fast': 'Fast Cast', 'quick': 'Quick Magic', 'haste': 'gear haste', 'si
          'pet_matk': 'pet Magic Atk. Bonus', 'pet_macc': 'pet magic accuracy', 'ready_delay': 'Ready recast', 'geomancy': 'Geomancy +', 'geo_skill': 'Geomancy skill',
          'bell': 'Handbell skill', 'indi_dur': 'Indicolure duration', 'utsu': 'Utsusemi +', 'nin_skill': 'Ninjutsu skill', 'blue_skill': 'Blue magic skill',
          'potency': 'Cure potency', 'step_acc': 'Step accuracy', 'acc': 'accuracy', 'att': 'attack', 'jump_tp': 'jump TP bonus', 'crit_dmg': 'critical hit damage',
+         'wyv_hp': 'wyvern HP', 'wyv_hp_pct': 'wyvern HP %', 'wyv_lvl': 'wyvern level', 'breath_plus': 'Breath+', 'breath_enh': '"Enhances breath" pieces',
          'crit': 'critical hit rate', 'holy_water': 'Holy Water', 'cursna_rec': 'Cursna received', 'charm': 'Charm', 'mbb': 'Magic burst damage', 'nin_dmg': 'Ninjutsu damage'}
 PCT = {'ds_pot', 'absorbtp', 'absorb_pot', 'crit', 'fast', 'quick', 'haste', 'sird', 'phys', 'magic', 'enh_dur', 'song_dur', 'snap', 'potency', 'crit_dmg', 'indi_dur'}
 
@@ -517,6 +541,8 @@ def focus_for(path, job=None):
     ab = ability_of(path)
     if 'treasurehunter' in rest or 'th' in rest or 'treasure' in rest:
         return 'Treasure Hunter'
+    if job == 'DRG' and any('breath' in x for x in rest):              # (sets.HealingBreath, sets.precast.JA['Deep Breathing'] is the ability's)
+        return 'Wyvern breath' if 'deep breathing' not in named else None
     if rest[0] in ('buff', 'utility') and len(rest) > 1:
         what = rest[1]
         if what == 'doom':
