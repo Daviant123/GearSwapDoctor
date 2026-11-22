@@ -82,6 +82,15 @@ def _gs_name(entry, items):
     return found[0]['en'] if found else entry['Name']
 
 
+def gs_item(entry, items):
+    """What goes in his file for a wsdist entry: the name, or {name, augments} for one augmented copy of several (2026-11-22)."""
+    import wsdist_runner as W
+    augs = W.AUGMENTED.get(entry.get('Name2'))
+    if augs:
+        return {'name': _gs_name(entry, items), 'augments': list(augs)}
+    return _gs_name(entry, items)
+
+
 def _pairs_same(a, b):
     return sorted(x for x in a if x) == sorted(x for x in b if x)
 
@@ -332,7 +341,7 @@ def ws_upgrades(loaded, job, sub, owned_ids, items, index, only=None, progress=N
             a = cur.get(slot, {}).get('Name2') if cur.get(slot) else None
             b = best[slot]['Name2'] if best.get(slot) and best[slot]['Name'] != 'Empty' else None
             if b and a != b:
-                changes[gs] = _gs_name(best[slot], items)
+                changes[gs] = gs_item(best[slot], items)
         # earrings / rings that only swapped sides aren't a change
         for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):
             w1, w2 = W.SLOT_MAP[p1], W.SLOT_MAP[p2]
@@ -401,7 +410,7 @@ def magic_upgrades(loaded, job, sub, owned_ids, items, index, progress=None, ene
             a = cur.get(slot, {}).get('Name2') if cur.get(slot) else None
             b = best[slot]['Name2'] if best.get(slot) and best[slot]['Name'] != 'Empty' else None
             if b and a != b:
-                changes[gs] = _gs_name(best[slot], items)
+                changes[gs] = gs_item(best[slot], items)
         for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):
             w1, w2 = W.SLOT_MAP[p1], W.SLOT_MAP[p2]
             cp_ = [cur.get(w1, {}).get('Name') if cur.get(w1) else None, cur.get(w2, {}).get('Name') if cur.get(w2) else None]
@@ -1018,7 +1027,7 @@ def am_build(loaded, m, job, sub, owned_ids, items, index, buffs=None, ws_tp=100
     for slot, e in best.items():
         gs = W.GS_SLOT.get(slot)
         if gs and gs not in ('main', 'sub', 'range') and e and e.get('Name') != 'Empty':
-            gear[gs] = _gs_name(e, items)
+            gear[gs] = gs_item(e, items)
     notes = [n.replace('(the set itself has it)', "(the weapon this set is for)") for n in plan['notes']]
     return dict(m, gear=gear, now=now, best=val, unit=info.get('metric', metric), notes=notes + _am_notes(info))
 
@@ -1070,7 +1079,7 @@ def _tp_entry(W, s, label, cur, best, val, now, notes, items, metric, info, req)
         a = cur.get(slot, {}).get('Name2') if cur.get(slot) else None
         b = best[slot]['Name2'] if best.get(slot) and best[slot]['Name'] != 'Empty' else None
         if b and a != b:
-            changes[gs] = _gs_name(best[slot], items)
+            changes[gs] = gs_item(best[slot], items)
     for p1, p2 in (('ear1', 'ear2'), ('ring1', 'ring2')):
         w1, w2 = W.SLOT_MAP[p1], W.SLOT_MAP[p2]
         cp_ = [cur.get(w1, {}).get('Name') if cur.get(w1) else None, cur.get(w2, {}).get('Name') if cur.get(w2) else None]

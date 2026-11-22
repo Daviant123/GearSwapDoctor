@@ -376,7 +376,7 @@ def gs_slots(best, W, items):
     for slot, e in best.items():
         gs = W.GS_SLOT.get(slot)
         if gs and gs not in ('main', 'sub', 'range') and e and e.get('Name') != 'Empty':
-            out[gs] = doctor._gs_name(e, items)
+            out[gs] = doctor.gs_item(e, items)
     return out
 
 
@@ -437,8 +437,8 @@ def build_one(rec, ctx):
             gs = W.GS_SLOT.get(slot)
             if gs and gs != 'range' and e and e.get('Name') != 'Empty' and (gs not in ('main', 'sub') or job in MAGES):
                 import doctor
-                out[gs] = doctor._gs_name(e, items)
-        if out.get('body') in magic.HOODED:
+                out[gs] = doctor.gs_item(e, items)
+        if (lambda v: v.get('name') if isinstance(v, dict) else v)(out.get('body')) in magic.HOODED:
             out.pop('head', None)
         return out, f"{magic.words(spell, opts)}: {dmg:,.0f} a cast"
     if how in ('points', 'magic'):

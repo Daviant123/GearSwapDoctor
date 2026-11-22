@@ -125,16 +125,20 @@ def load_bags(character, steward_chars=None):
         out[str(bag)] = {int(k): int(v) for k, v in items.items()} if items else {}
     out['_time'] = int(t.time or 0)
     global LAST_AUGS
+    global LAST_RANKED
     try:                                       # (the augments in the same file: wsdist_runner picks a weapon's rank by them, "Path: A" -> Tizona R15)
         LAST_AUGS = _augs_of(t)
     except Exception:
         LAST_AUGS = {}
+    # (Steward 1.2.1+ saves an Odyssey piece's rank: then a ranked piece with nothing saved is rank 0, not the best rank)
+    LAST_RANKED = any(str(a).startswith('Rank:') for copies in LAST_AUGS.values() for c in copies for a in c)
     return out
 
 
 # {item id: [[augment, ...], ...]} of the character whose bags were read last (load_bags). wsdist_runner.plan_ws reads it: plan_ws is
 # always called right after load_bags for the same character, and has no character of its own.
 LAST_AUGS = {}
+LAST_RANKED = False
 
 
 def _augs_of(t):

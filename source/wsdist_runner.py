@@ -151,19 +151,74 @@ _RANK = re.compile(r' r(\d+) ?([a-d])?\b')
 def _by_path(entries, augments):
     """The highest rank wsdist lists for an item whose augments name a path ("Path: A" on his Tizona: it's the ranked one, Tizona R15) - the
     game shows the path, not the rank; the highest is assumed. None when the augments name no path or wsdist has no ranks for it."""
-    m = re.search(r'path: ?([a-d])\b', ' '.join(augments or ()).lower())
-    if not m:
+    text = ' '.join(augments or ()).lower()
+    m = re.search(r'path: ?([a-d])\b', text)
+    rk = re.search(r'rank: ?(\d+)', text)          # (Steward 1.2.1+ saves the rank too, 2026-11-22: then it isn't guessed)
+    if not m and not rk:
         return None
+    cap = int(rk.group(1)) if rk else None
     best = None
     for e in entries:
         r = _RANK.search(e['Name2'].lower()[len(e['Name']):] + ' ')
-        if r and (r.group(2) in (None, m.group(1))) and 'night' not in e['Name2'].lower():
-            if best is None or int(r.group(1)) > best[0]:
-                best = (int(r.group(1)), e)
+        if not r or 'night' in e['Name2'].lower():
+            continue
+        n, letter = int(r.group(1)), r.group(2)
+        if m and letter not in (None, m.group(1)):
+            continue
+        if not m and letter is not None:
+            continue
+        if cap is not None and n > cap:
+            continue
+        if best is None or n > best[0]:
+            best = (n, e)
     return best[1] if best else None
 
 
 def pick_variant(entries, augments=None):
+    """_pick_variant, plus the stats of the copy's own augments when wsdist's entry is the plain item (2026-11-22, his request: "is gearswap
+    doctor able to see the rank and effects of augmented gear"). Herculean Boots with 'Weapon skill damage +3%', 'STR+7' gets them."""
+    e = _pick_variant(entries, augments)
+    if augments and e.get('Name2') == e.get('Name'):
+        extra = augment_stats(augments)
+        if extra:
+            e = dict(e)
+            for k, v in extra.items():
+                e[k] = e.get(k, 0) + v
+            own = [a for a in augments if not str(a).lower().startswith(('rank:', 'path:'))]
+            e['Name2'] = f"{e['Name']} ({', '.join(own[:3])}{', ...' if len(own) > 3 else ''})"
+            AUGMENTED[e['Name2']] = own              # (not in the entry: wsdist adds up every stat in it)
+    return e
+
+
+# {Name2 of an augmented copy: its augment lines} - doctor.gs_item writes that copy by them
+AUGMENTED = {}
+
+
+_AUG_WORDS = [('Rng.Acc.', 'Ranged Accuracy'), ('Rng. Acc.', 'Ranged Accuracy'), ('Rng.Atk.', 'Ranged Attack'), ('Rng. Atk.', 'Ranged Attack'),
+              ('Mag. Acc.', 'Magic Accuracy'), ('Mag.Acc.', 'Magic Accuracy'), ('"Mag.Atk.Bns."', '"Magic Atk. Bonus"'),
+              ('"Mag. Atk. Bns."', '"Magic Atk. Bonus"'), ('"Dbl.Atk."', '"Double Attack"'), ('"Dbl. Atk."', '"Double Attack"'),
+              ('"Triple Atk."', '"Triple Attack"'), ('Crit.hit rate', 'Critical hit rate'), ('Crit. hit rate', 'Critical hit rate'),
+              ('Crit.hit damage', 'Critical hit damage'), ('Crit. hit damage', 'Critical hit damage'), ('Phys. dmg. taken', 'Physical damage taken'),
+              ('Magic dmg. taken', 'Magic damage taken'), ('Mag. dmg. taken', 'Magic damage taken'), ('"Mag. Dmg."', 'Magic Damage'),
+              ('Mag. Dmg.', 'Magic Damage'), ('"Dual Wield"', '"Dual Wield"'), ('"Subtle Blow"', '"Subtle Blow"')]
+
+
+def augment_stats(augments):
+    """wsdist stats from a copy's augment lines ('Accuracy+21 Attack+21', 'Weapon skill damage +3%', '"Triple Atk."+3' ...). Pet: lines, the
+    path and the rank are not the wearer's stats."""
+    out = {}
+    for a in augments or ():
+        a = str(a)
+        if a.lower().startswith(('pet:', 'path:', 'rank:', 'avatar:', 'wyvern:', 'automaton:')):
+            continue
+        for w, to in _AUG_WORDS:
+            a = a.replace(w, to)
+        for k, v in text_stats(a).items():
+            out[k] = out.get(k, 0) + v
+    return out
+
+
+def _pick_variant(entries, augments=None):
     """One wsdist entry for an owned item: the plain one, else the one whose augments look like the set's, else the
     highest rank listed (R25 / R30 ...). An item whose augments name only a path ("Path: A", what the game shows on a ranked Ultimate Weapon)
     is the highest rank of that path: plain Tizona is the unranked one (DMG 147), his has Path: A (Tizona R15, DMG 165) - found 2026-11-21."""
@@ -795,14 +850,25 @@ def off_hand(entry, items):
     return entry
 
 
+def _copies(iid):
+    """The augments of each copy of an owned item Steward saw ([None] when it saw none). A ranked (Odyssey ...) piece without any, when the
+    saved bags have ranks (Steward 1.2.1+), is rank 0: ['Rank: 0']."""
+    import checks
+    got = checks.LAST_AUGS.get(iid)
+    if got:
+        return got
+    if getattr(checks, 'LAST_RANKED', False):
+        return [['Rank: 0']]
+    return [None]
+
+
 def _bag_augs(name, items):
     """The augments Steward saw on his copy of an item (checks.LAST_AUGS), for a set that names none."""
-    import checks
     for it in items.find(name):
         if it['en'].lower() == (name or '').lower():
-            got = checks.LAST_AUGS.get(it['id'])
+            got = _copies(it['id'])[0]
             if got:
-                return got[0]
+                return got
     return None
 
 
@@ -846,7 +912,7 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
             ents = it and entries_for(it['en'], items, index)
             if not ents:
                 continue
-            e = pick_variant(ents, (checks.LAST_AUGS.get(iid) or [None])[0])
+            e = pick_variant(ents, _copies(iid)[0])
             if e.get('Skill Type') == skill and job.lower() in e['Jobs'] and e.get('Type') == 'Weapon':
                 if best is None or (e.get('DMG', 0), e['Name']) > (best.get('DMG', 0), best['Name']):
                     best = e
@@ -877,15 +943,18 @@ def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_wh
         ents = entries_for(it['en'], items, index)
         if not ents:
             continue
-        e = pick_variant(ents, (checks.LAST_AUGS.get(iid) or [None])[0])
-        if job.lower() not in e['Jobs']:
-            continue
-        for slot in SLOT_MAP.values():
-            if slot in locked:
+        seen = set()
+        for augs in _copies(iid):                          # (two Herculean Boots, augmented differently: both are choices)
+            e = pick_variant(ents, augs)
+            if job.lower() not in e['Jobs'] or e['Name2'] in seen:
                 continue
-            bits = checks.SLOT_BITS.get(GS_SLOT[slot])
-            if bits and any(it['slots'] & (1 << b) for b in bits):
-                owned.setdefault(slot, []).append(e)
+            seen.add(e['Name2'])
+            for slot in SLOT_MAP.values():
+                if slot in locked:
+                    continue
+                bits = checks.SLOT_BITS.get(GS_SLOT[slot])
+                if bits and any(it['slots'] & (1 << b) for b in bits):
+                    owned.setdefault(slot, []).append(e)
     for slot in locked:
         owned[slot] = [current[slot]] if slot in current else []
     return owned, current, notes, skill
