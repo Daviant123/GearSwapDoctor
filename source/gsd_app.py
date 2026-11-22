@@ -63,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.39.2'
+VERSION = '2.39.3'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -637,6 +637,19 @@ class App(tk.Tk):
         for cbx in (self.sim_enemy, self.set_enemy):
             cbx.configure(values=names)
         self.sim_status.config(text='wsdist ready.')
+        self._sim_refresh_weapons()
+
+    def _sim_refresh_weapons(self):
+        """Build a set's weapon lists again (wsdist has loaded: only now are they filtered to the set's weapon skill), keeping his picks."""
+        try:
+            sp = self.sim_set.get()
+            if not sp:
+                return
+            mains, subs = self._weapon_choices(self.sim_file.get(), sp, doctor.is_tp_set(sp))
+            self.sim_main.configure(values=[WPN_AUTO] + mains)
+            self.sim_subw.configure(values=[WPN_AUTO, doctor.NO_SUB] + subs)
+        except Exception:
+            pass
 
     def _tree(self, parent, cols, heads, widths, tree_width=240):
         frame = ttk.Frame(parent)
@@ -4805,8 +4818,10 @@ class App(tk.Tk):
     def _weapon_choices(self, fname, set_path, is_tp):
         """(main weapons, sub items) he owns that this job can use - for a weapon skill set only that skill's weapons."""
         job = checks.job_of(fname or '')
-        if not job or self.items is None:
+        if not job:
             return [], []
+        if self.items is None:                  # (opened before the background load finished: the list stayed empty, 2026-11-21)
+            self.items = checks.Items()
         p = os.path.join(doctor.DATA, f'bags_{self.who.get()}.json')
         try:
             snap = json.load(open(p, encoding='utf-8'))
