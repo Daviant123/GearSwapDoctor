@@ -667,7 +667,8 @@ def ws_skill(ws):
 
 
 def entries_for(name, items, index):
-    """wsdist entries for a GearSwap item name, through the game's short and long names."""
+    """wsdist entries for a GearSwap item name, through the game's short and long names. A weapon wsdist doesn't list (an Arasy Tabar,
+    2026-11-21: the axe was missing from Build a set) is built from the game's own data instead - game_weapon()."""
     out = index.get(name.lower())
     if out:
         return out
@@ -675,7 +676,96 @@ def entries_for(name, items, index):
         for n in (it['en'].lower(), it['enl'].lower()):
             if n in index:
                 return index[n]
+    e = game_weapon(name)
+    if e:
+        index[name.lower()] = [e]          # (kept: the same entry everywhere after this)
+        return index[name.lower()]
     return None
+
+
+SKILL_NAMES = {1: 'Hand-to-Hand', 2: 'Dagger', 3: 'Sword', 4: 'Great Sword', 5: 'Axe', 6: 'Great Axe', 7: 'Scythe', 8: 'Polearm',
+               9: 'Katana', 10: 'Great Katana', 11: 'Club', 12: 'Staff', 25: 'Archery', 26: 'Marksmanship', 27: 'Throwing'}
+JOB_BITS = ['war', 'mnk', 'whm', 'blm', 'rdm', 'thf', 'pld', 'drk', 'bst', 'brd', 'rng', 'sam', 'nin', 'drg', 'smn', 'blu', 'cor', 'pup',
+            'dnc', 'sch', 'geo', 'run']
+# the item text's words -> wsdist's stat names (only stats that always apply: a "Pet:", "Latent effect:", "Aftermath:" ... part is left out)
+_TEXT_STATS = [
+    (r'\bSTR([+-]\d+)', 'STR'), (r'\bDEX([+-]\d+)', 'DEX'), (r'\bVIT([+-]\d+)', 'VIT'), (r'\bAGI([+-]\d+)', 'AGI'),
+    (r'\bINT([+-]\d+)', 'INT'), (r'\bMND([+-]\d+)', 'MND'), (r'\bCHR([+-]\d+)', 'CHR'),
+    (r'(?<!Ranged )(?<!Magic )\bAccuracy([+-]\d+)', 'Accuracy'), (r'(?<!Ranged )(?<!Magic )\bAttack([+-]\d+)', 'Attack'),
+    (r'Ranged Accuracy([+-]\d+)', 'Ranged Accuracy'), (r'Ranged Attack([+-]\d+)', 'Ranged Attack'),
+    (r'Magic Accuracy([+-]\d+)', 'Magic Accuracy'), (r'"Magic Atk\. Bonus"([+-]\d+)', 'Magic Attack'), (r'Magic Damage([+-]\d+)', 'Magic Damage'),
+    (r'"Store TP"([+-]\d+)', 'Store TP'), (r'"TP Bonus"([+-]\d+)', 'TP Bonus'), (r'"Double Attack"([+-]\d+)', 'DA'),
+    (r'"Triple Attack"([+-]\d+)', 'TA'), (r'"Dual Wield"([+-]\d+)', 'Dual Wield'), (r'"Subtle Blow"([+-]\d+)', 'Subtle Blow'),
+    (r'Critical hit rate ?([+-]\d+)', 'Crit Rate'), (r'Critical hit damage ?([+-]\d+)', 'Crit Damage'),
+    (r'Weapon skill damage ?([+-]\d+)', 'Weapon Skill Damage'), (r'Haste([+-]\d+)', 'Gear Haste'), (r'"Regain"([+-]\d+)', 'Regain'),
+    (r'Damage taken ?([+-]\d+)', 'DT'), (r'Physical damage taken ?([+-]\d+)', 'PDT'), (r'Magic damage taken ?([+-]\d+)', 'MDT'),
+    (r'Magic Accuracy skill ?\+(\d+)', 'Magic Accuracy Skill'),
+]
+_CUT = re.compile(r'\b(Pet:|Avatar:|Wyvern:|Automaton:|Latent effect|Aftermath|Unity Ranking|Set:|Dynamis|Daytime|Nighttime|In Assault|'
+                  r'Reives|Campaign|Besieged|Odyssey|Sortie|Weather|Additional effect|vs\.|Enhances|Occasionally|Converts|Adds|Ignores)', re.I)
+_GAME = None
+
+
+def _game_items():
+    """{lower-case name: (items.lua fields, item text)} for every weapon of a skill, read once."""
+    global _GAME
+    if _GAME is None:
+        _GAME = {}
+        res = os.path.join(paths.WINDOWER or '', 'res')
+        text = {}
+        try:
+            for line in open(os.path.join(res, 'item_descriptions.lua'), encoding='utf-8', errors='replace'):
+                m = re.match(r'\s*\[(\d+)\] = \{id=\d+,en="((?:[^"\\]|\\.)*)"', line)
+                if m:
+                    text[int(m.group(1))] = m.group(2).replace('\\n', '\n').replace('\\"', '"')
+            for line in open(os.path.join(res, 'items.lua'), encoding='utf-8', errors='replace'):
+                if 'category="Weapon"' not in line or 'skill=' not in line or 'damage=' not in line:
+                    continue
+                m = re.match(r'\s*\[(\d+)\] = \{id=\d+,en="([^"]*)"', line)
+                if not m:
+                    continue
+                f = {k: int(v) for k, v in re.findall(r'\b(\w+)=(\d+)', line)}
+                enl = re.search(r'enl="([^"]*)"', line)
+                rec = (m.group(2), f, text.get(int(m.group(1)), ''))
+                _GAME.setdefault(m.group(2).lower(), rec)
+                if enl:
+                    _GAME.setdefault(enl.group(1).lower(), rec)
+        except OSError:
+            pass
+    return _GAME
+
+
+def text_stats(text, skill=None):
+    """wsdist stats from an item's text ("DMG:148 Delay:288 STR+6 ... Axe skill +242 ... Pet: Accuracy+10" -> STR 6, Axe Skill 242 ...)."""
+    out = {}
+    for line in (text or '').split('\n'):
+        cut = _CUT.search(line)
+        line = line[:cut.start()] if cut else line
+        for m in re.finditer(r'([A-Z][A-Za-z\- ]+?) skill ?\+(\d+)', line):
+            k = m.group(1).strip() + ' Skill'
+            if k.lower() != 'magic accuracy skill':
+                out[k] = out.get(k, 0) + int(m.group(2))
+        for rx, key in _TEXT_STATS:
+            for m in re.finditer(rx, line):
+                out[key] = out.get(key, 0) + int(m.group(1))
+    return {k: v for k, v in out.items() if v}
+
+
+def game_weapon(name):
+    """A wsdist entry for a weapon wsdist doesn't list, from the game's own data: DMG, Delay, kind of weapon, the jobs that use it and the
+    stats in its text. Missing: anything the text says only sometimes (latents, Aftermath, Pet:) - so it can be a little low, never high."""
+    rec = _game_items().get((name or '').lower())
+    if not rec:
+        return None
+    en, f, text = rec
+    skill = SKILL_NAMES.get(f.get('skill'))
+    if not skill or f.get('skill', 99) > 12 or not f.get('damage'):          # (melee weapons: a bow / gun / throwing item has more wsdist needs)
+        return None
+    e = {'Name': en, 'Name2': en, 'Type': 'Weapon', 'Skill Type': skill, 'DMG': f['damage'], 'Delay': f.get('delay', 0),
+         'Jobs': [j for i, j in enumerate(JOB_BITS) if f.get('jobs', 0) & (1 << (i + 1))], 'GSD from game data': True}
+    for k, v in text_stats(text).items():
+        e[k] = e.get(k, 0) + v
+    return e
 
 
 _TPB = None
