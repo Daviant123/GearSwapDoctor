@@ -864,12 +864,13 @@ def _copies(iid):
 
 def _bag_augs(name, items):
     """The augments Steward saw on his copy of an item (checks.LAST_AUGS), for a set that names none."""
-    for it in items.find(name):
-        if it['en'].lower() == (name or '').lower():
-            got = _copies(it['id'])[0]
-            if got:
-                return got
-    return None
+    import checks
+    same = [it for it in items.find(name) if it['en'].lower() == (name or '').lower()]
+    for it in same:                       # (two items share a name - Tizona has two ids: the one he owns has the augments)
+        got = checks.LAST_AUGS.get(it['id'])
+        if got:
+            return got[0]
+    return _copies(same[0]['id'])[0] if same else None
 
 
 def plan_ws(job, sub, ws, set_gear, weapon_sets, owned_ids, items, index, bag_where=None, file_range=False):

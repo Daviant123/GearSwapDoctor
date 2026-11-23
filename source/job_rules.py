@@ -6,10 +6,13 @@ Floestone and Oshasha's Treatise. Those put in the ammo slot take the gun off. S
 
   COR, RNG   always: they keep a gun, bow or crossbow on whether a set names it or not
   any job    a set (or the file) that puts something in the range slot, like a BRD's instrument
-Not PUP: an animator takes its oils, and stat ammo isn't known to harm it. Not a GEO's set with no bell in it: those use stat ammo on purpose.
+  PUP        always (his report 2026-11-22: "the melee set is still using ammo slot instead of animator"): ammo in a set takes the animator off;
+             BG Wiki's PUP sets never pair ammo with one. The Doctor never adds or changes a PUP's ammo (Repair's oil is his own to set).
+Not a GEO's set with no bell in it: those use stat ammo on purpose.
 Which ammo is which comes from the game's own data (res\\items.lua ammo_type).
 """
 RANGED_JOBS = ('COR', 'RNG')
+KEEPS_RANGE = RANGED_JOBS + ('PUP',)        # (no new ammo for these: it takes off what they keep in the range slot)
 MATCHING = ('Bullet', 'Arrow', 'Bolt')
 RANGE_KEYS = ('range', 'ranged')
 
@@ -29,7 +32,7 @@ def file_uses_range(loaded):
 
 def lock_ammo(job, gear=None, file_range=False):
     """The ammo slot is left as it is for this set: nothing new goes in."""
-    if (job or '').upper() in RANGED_JOBS or file_range:
+    if (job or '').upper() in KEEPS_RANGE or file_range:
         return True
     return sets_range(gear)
 
@@ -81,7 +84,7 @@ def safe_edits(job, edits, items):
     """A list of edits for a file, with the ammo slot left alone for a COR or RNG (his request 2026-11-21: "make sure the ammo slot isnt getting
     changed"): no new ammo in a set, a new set or an added set - not even another bullet, which a shot or weapon skill would use up. The one
     exception is the check-up's repair (tagged AMMO_FIX): a bullet put back where the set's own ammo would take the gun off."""
-    if (job or '').upper() not in RANGED_JOBS:
+    if (job or '').upper() not in KEEPS_RANGE:
         return edits
     out = []
     for e in edits:
