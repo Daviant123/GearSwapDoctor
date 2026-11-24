@@ -128,6 +128,9 @@ def words(gear):
 NAMED = [
     (re.compile(r'Increases? song effect duration V\b'), None, {'song_dur': 50}),      # Carnwenhan 119 III: "Increases Song duration by 50%"
     (re.compile(r'Increases song effect duration(?! ?\+)'), 'daurdabla', {'song_dur': 30}),   # Daurdabla 99: "Increases Song duration by 30%"
+    # Moonshade Earring: Windower's res has no text for it. BG Wiki: Latent "Refresh"+1 "active when you are not engaged with an enemy; however,
+    # it is not active while resting" - so it counts in idle sets (2026-11-23)
+    (re.compile(r''), 'moonshade earring', {'refresh': 1}),
 ]
 
 

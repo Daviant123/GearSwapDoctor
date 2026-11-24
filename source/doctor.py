@@ -59,7 +59,7 @@ def snapshot(character, items=None, bags=None):
     bags = bags if bags is not None else checks.load_bags(character)
     if bags is None:
         return None
-    out = {'character': character, 'time': int(time.time()), 'from_steward': bags.get('_time'), 'bags': {}}
+    out = {'character': character, 'time': int(time.time()), 'from_steward': bags.get('_time'), 'nation': bags.get('_nation'), 'bags': {}}
     for bag, content in bags.items():
         if bag.startswith('_'):
             continue
@@ -508,6 +508,7 @@ def idle_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, real=
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    healing.NATION = (bags or {}).get('_nation')
     cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real)      # (real: checks.load_augments, the gear as it is in his bags)
     out = []
     import pld
@@ -561,6 +562,7 @@ def pet_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, real=N
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    healing.NATION = (bags or {}).get('_nation')
     cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real)      # (real: checks.load_augments, the gear as it is in his bags)
     out = []
     for s in pup.checked_sets(loaded):
@@ -603,6 +605,7 @@ def pld_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, limit=
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    healing.NATION = (bags or {}).get('_nation')
     cands = healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real)      # (real: checks.load_augments, the gear as it is in his bags)
     ihp = pld.idle_hp(loaded, items, _IDLE_DATA, counts)
     out, done = [], {}
@@ -646,6 +649,7 @@ def _owned_cands(loaded, job, bags, items, real=None):
                     counts[it['en']] = counts.get(it['en'], 0) + n
                     seen.add(iid)
     owned = [items.by_id[i] for i in seen if not (job in checks.JOBS and items.by_id[i]['jobs'] and not items.by_id[i]['jobs'] & (1 << checks.JOBS[job]))]
+    healing.NATION = (bags or {}).get('_nation')
     return healing.candidates(owned, _IDLE_DATA, healing.known_augments([loaded]), real), counts
 
 

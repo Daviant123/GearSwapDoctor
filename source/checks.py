@@ -124,6 +124,8 @@ def load_bags(character, steward_chars=None):
     for bag, items in t.bags.items():
         out[str(bag)] = {int(k): int(v) for k, v in items.items()} if items else {}
     out['_time'] = int(t.time or 0)
+    if t.nation is not None:                   # (Steward 1.2.2+: 0 San d'Oria, 1 Bastok, 2 Windurst)
+        out['_nation'] = NATIONS.get(int(t.nation))
     global LAST_AUGS
     global LAST_RANKED
     try:                                       # (the augments in the same file: wsdist_runner picks a weapon's rank by them, "Path: A" -> Tizona R15)
@@ -139,6 +141,7 @@ def load_bags(character, steward_chars=None):
 # always called right after load_bags for the same character, and has no character of its own.
 LAST_AUGS = {}
 LAST_RANKED = False
+NATIONS = {0: "San d'Oria", 1: 'Bastok', 2: 'Windurst'}
 
 
 def _augs_of(t):

@@ -113,14 +113,32 @@ CUT_RX = re.compile(r'(?:\bSet:|Unity Ranking:|Latent effect|Pet:|Avatar:|Wyvern
                     r'Salvage:|Dynamis[^:]{0,20}:|Besieged:|Nighttime:|Daytime:|Dusk[^:]{0,12}:|Dawn[^:]{0,12}:|\bOn [A-Za-z]+:)')
 
 MP_RX = re.compile(r'"Cure" MP consumed \+(\d+)')
+# "Citizen of Windurst: "Refresh"+1" (Sibyl Scarf ...): only for that nation (2026-11-23). NATION is the character's, from Steward's saved bags
+# (checks.load_bags '_nation'); None = not known, then it isn't counted.
+CITIZEN_RX = re.compile(r"Citizen of ([A-Za-z' ]+?):")
+NATION = None
+# a latent Refresh (Fucho-no-Obi: only when MP is under half): not counted, but kept so an idle check-up can say so
+LATENT_REFRESH_RX = re.compile(r'Latent effect: "Refresh" ?\+(\d+)')
+
+
+def citizen_of(text):
+    """The nation a text's bonus is for ("Windurst"), or None."""
+    m = CITIZEN_RX.search(text or '')
+    return m.group(1) if m else None
 
 
 def parse_text(text):
     """{stat: value} from an item's description or one augment."""
+    out = {}
+    lat = LATENT_REFRESH_RX.search(text)
+    if lat:
+        out['refresh_latent'] = int(lat.group(1))
+    c = CITIZEN_RX.search(text)
+    if c:
+        text = text[:c.start()] + (text[c.end():] if NATION and NATION.lower() == c.group(1).lower() else '')
     m = CUT_RX.search(text)
     if m:
         text = text[:m.start()]
-    out = {}
     for k, rx in STAT_RX:
         n = sum(int(x) for x in rx.findall(text))
         if n:
@@ -217,7 +235,7 @@ def candidate(it, data, augments=None):
     # (a JSE earring whose stats are all "Right ear:": nothing in the left ear, so it only goes in the right)
     side = 'ear2' if text.startswith('Right ear:') else 'ear1' if text.startswith('Left ear:') else None
     return {'name': it['en'], 'enl': it['enl'], 'id': it['id'], 'augments': list(augments or []), 'stats': st, 'slots': it['slots'], 'side': side, 'quoted': quoted,
-            'blocks': blocked_slots(text),
+            'blocks': blocked_slots(text), 'citizen': citizen_of(text),
             'set': hidden.family(text, it['en']),
             'skill': info.get('skill'), 'shield': info.get('shield', False),
             'two_handed': info.get('skill') in TWO_HANDED and bool(it['slots'] & 1)}

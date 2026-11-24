@@ -63,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.40.2'
+VERSION = '2.40.3'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -3657,8 +3657,10 @@ class App(tk.Tk):
             except Exception:
                 pass
         counts = {}
+        healing.NATION = None
         try:
             snap = json.load(open(os.path.join(doctor.DATA, f'bags_{self.who.get()}.json'), encoding='utf-8'))
+            healing.NATION = snap.get('nation')          # ("Citizen of Windurst:" bonuses count only for that nation)
             for bag, content in snap.get('bags', {}).items():
                 if bag in checks.EQUIP_BAGS:
                     for n, c in content.items():
@@ -4080,6 +4082,7 @@ class App(tk.Tk):
                 ids, bags = self._cr_ids()
                 snap = {b: {items.by_id[i]['en']: n for i, n in c.items() if i in items.by_id} for b, c in bags.items() if not b.startswith('_')}
                 owned = features.owned_items(items, snap, job)
+                healing.NATION = (bags or {}).get('_nation')
                 cands = healing.candidates(owned, data, healing.known_augments(self.cr_load_files), checks.load_augments(who))
                 counts = {}
                 for b, c in snap.items():

@@ -138,6 +138,16 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
         notes.append(f'{job}/{sub} has no MP: Refresh counts for nothing')
     if is_pet(path):
         notes.append("a set for your pet: only your own numbers are counted here, not the pet's")
+    if base['mp']:
+        lat = sorted({c['name'] for c in cands if c['stats'].get('refresh_latent')})
+        if lat:
+            notes.append(f"not counted: {', '.join(lat)} (Refresh +1 only when your MP is under half)")
+        nat = sorted({(c['name'], c['citizen']) for c in cands if c.get('citizen') and c['stats'].get('refresh') is None})
+        if nat:
+            notes.append('not counted: ' + ', '.join(f'{n} (Refresh only for a citizen of {w}' + ('' if healing.NATION else
+                                                     "; your nation isn't saved yet: //lua r steward") + ')' for n, w in nat))
+    if 'resting' in _words(path):
+        pool = [c for c in pool if c['name'] != 'Moonshade Earring']     # (its Refresh is off while resting)
     n0 = numbers(cur)
     v0 = value(cur, focus, base)
     out = {'cur': cur, 'best': cur, 'now': v0, 'val': v0, 'n_now': n0, 'n_best': n0, 'changes': {}, 'focus': focus, 'keep': keep, 'notes': notes, 'short': 0, 'base': base}
