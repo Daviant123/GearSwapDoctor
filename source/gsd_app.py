@@ -63,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.40.1'
+VERSION = '2.40.2'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -4868,6 +4868,7 @@ class App(tk.Tk):
                 ld = self.loaded_file(path)
                 gear = next(s['gear'] for s in ld.sets if s['path'] == set_path)
                 cands, counts = self._heal_cands(job)
+                self._sim_cands = cands                   # (the dropdowns score a pick from these)
                 # (the augments on his Taeon and the like are only known from his files: this one has them)
                 if self._heal_data is not None:
                     seen = {(c['name'], tuple(c['augments'])) for c in cands}
@@ -4928,6 +4929,13 @@ class App(tk.Tk):
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
         self._sim_view = (now_gear, names(r['best']))
+        if mod is job_sets:
+            line = lambda g: None if not r['val'] else (lambda v: f"{v / r['val'] * 100 - 100:+.1f} % against the best")(job_sets.value(g, r['focus']))  # noqa: E731
+        elif mod is pld:
+            line = lambda g: pld.words(pld.numbers(g, r['focus']), r['focus'])  # noqa: E731
+        else:
+            line = lambda g: pup.words(pup.numbers(g), r['focus'])  # noqa: E731
+        self._sim_offer_cands(path, now_gear, r['best'], ('main', 'sub', 'range') if r.get('keep', True) else ('range',), line)
         self._sim_slots_changed()
 
     def _sim_idle(self, find_best):
@@ -4949,6 +4957,7 @@ class App(tk.Tk):
                 ld = self.loaded_file(path)
                 gear = doctor.with_weapons(next(s['gear'] for s in ld.sets if s['path'] == set_path), target)
                 cands, counts = self._heal_cands(job)
+                self._sim_cands = cands                   # (the dropdowns score a pick from these)
                 keep = True if target.get('main') or target.get('sub') else None
                 r = idle.judge(set_path, gear, job, sub, cands, counts, self.items or checks.Items(), self._heal_data, need=need, focus=focus,
                                keep_weapons=keep, build=find_best, shell=shell)
@@ -4994,6 +5003,8 @@ class App(tk.Tk):
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
         self._sim_view = (now_gear, names(r['best']))
+        self._sim_offer_cands(path, now_gear, r['best'], ('main', 'sub', 'range') if r['keep'] else ('range',),
+                              lambda g: idle.words(idle.numbers(g), r['base']))
         self._sim_slots_changed()
 
     def simulate(self, find_best):
@@ -5265,6 +5276,7 @@ class App(tk.Tk):
                 ld = self.loaded_file(path)
                 gear = next(s['gear'] for s in ld.sets if s['path'] == set_path)
                 cands, counts = self._heal_cands(job)
+                self._sim_cands = cands                   # (the dropdowns score a pick from these)
                 its = self.items or checks.Items()
                 cur = healing.set_to_gear(gear, its, self._heal_data, cands=cands)
                 pool = [c for c in cands if any(c['stats'].get(k) for k in gs_create.POINTS[kind])]
@@ -5304,6 +5316,8 @@ class App(tk.Tk):
         self.sim_apply_btn.config(state='normal' if self.sim_best else 'disabled')
         self.sim_new_btn.config(state='normal' if self.sim_best_gear else 'disabled')
         self._sim_view = (names(cur), names(best))
+        self._sim_offer_cands(path, names(cur), best, ('main', 'sub', 'range'),
+                              lambda g: f"{healing.evaluate('points', g, {}, kind)[0]:,.0f} points (best {val:,.0f})")
         self._sim_slots_changed()
 
     def _sim_done(self, path, set_path, what, now, dmg, now_gear, best_gear, notes, tp, enemy, info=None, metric='time'):
@@ -5448,6 +5462,14 @@ class App(tk.Tk):
                     continue
                 self.sim_grid_best.pick(slot, ([] if cur else [PICK_ONE]) + choices, cur or PICK_ONE, self._sim_picked)
 
+    def _sim_offer_cands(self, path, now_gear, best, keep_w, line):
+        """The dropdowns for an idle / defense / pet / job / points result too (his request 2026-11-23: "why didnt i get dropdown boxes"). A pick is
+        judged again the same way: line(gear) is the words for the set with it."""
+        names = {s: c['name'] for s, c in best.items() if c}
+        self._sim_tips_best = {}
+        self._sim_rescore = {'kind': 'cands', 'best': dict(best), 'picked': {}, 'cands': getattr(self, '_sim_cands', None) or [], 'line': line}
+        self._sim_offer(path, now_gear, names, {}, keep_w)
+
     def _sim_picked(self, slot, name):
         """He picked an item for a slot from the dropdown: it's in the best set (and in what Put it in / Save it as use)."""
         if name == PICK_ONE or not self._sim_view:
@@ -5471,6 +5493,9 @@ class App(tk.Tk):
         scored (said so in the slot)."""
         ctx = getattr(self, '_sim_rescore', None)
         if not ctx:
+            return
+        if ctx.get('kind') == 'cands':
+            self._sim_rescore_cands(ctx, slot, name)
             return
         import wsdist_runner as W
         ws_slot = W.SLOT_MAP.get(slot)
@@ -5510,6 +5535,23 @@ class App(tk.Tk):
                    f"\nWith your picks: {v:,.0f}{unit} - {word} wsdist's best"
             self.after(0, lambda: self.sim_result.config(text=base + line))
         threading.Thread(target=work, daemon=True).start()
+
+    def _sim_rescore_cands(self, ctx, slot, name):
+        """A pick in an idle / pet / job / points result: the set judged again with it ("With your picks: ...")."""
+        base = self.sim_result.cget('text').split('\nWith your picks')[0]
+        c = next((c for c in ctx['cands'] if c['name'].lower() == name.lower() and healing.fits(c, slot)), None)
+        if c is None:
+            self._sim_tips_best[slot] = "(your pick - not in the numbers)"
+            self._sim_slots_changed()
+            return
+        ctx['picked'][slot] = c
+        gear = dict(ctx['best'], **ctx['picked'])
+        try:
+            text = ctx['line'](gear)
+        except Exception as e:
+            text = f'could not judge it ({e})'
+        if text:
+            self.sim_result.config(text=base + '\nWith your picks: ' + text)
 
     def _real_lines(self, what, tpset, tp, enemy, now, now_gear):
         """His real fights beside wsdist's number, when the feature has recorded any."""
