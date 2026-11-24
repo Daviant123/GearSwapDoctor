@@ -63,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.40.3'
+VERSION = '2.40.4'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -3775,6 +3775,7 @@ class App(tk.Tk):
         keep, solace, kind = bool(self.heal_keep.get()), bool(self.heal_solace.get()), rec['kind']
         cands, counts = self._heal_cands(job)
         cur = healing.set_to_gear(rec['gear'], self.items, self._heal_data, cands=cands)
+        self._heal_last_cands, self._heal_last_counts = cands, counts
         if not cands:
             self.heal_status.config(text='No saved bags for this character yet: Check now makes the list (from Steward or findAll).')
             return
@@ -3835,6 +3836,70 @@ class App(tk.Tk):
                                                                 if not (keep and s in ('main', 'sub'))}}
         self.heal_put_btn.config(text='Add this set to the file' if rec['new'] else 'Put it in this set',
                                  state='normal' if (ch or rec['new']) and self.heal_result['gear'] else 'disabled')
+        self.heal_new_btn.config(state='normal' if self.heal_result['gear'] and not rec['new'] else 'disabled')
+        self._heal_pick_ctx = {'rec': rec, 'cur': cur, 'best': dict(best), 'base': base, 'spell': spell, 'need': need, 'keep': keep,
+                               'cands': getattr(self, '_heal_last_cands', None) or [],
+                               'counts': getattr(self, '_heal_last_counts', None) or {}, 'words': ' '.join(words)}
+        self._heal_offer()
+
+    def _heal_offer(self):
+        """A dropdown in every slot of the best healing set (his request 2026-11-24: "this should also have the drop down boxes"): the gear he owns
+        that fits, the best for this set first (each judged in the set on its own). A pick is judged again (_heal_picked)."""
+        ctx = self._heal_pick_ctx
+        kind, best, base, spell = ctx['rec']['kind'], ctx['best'], ctx['base'], ctx['spell']
+        for row in GRID:
+            for slot in row:
+                if slot == 'range' or (ctx['keep'] and slot in ('main', 'sub')):
+                    continue
+                seen, scored = set(), []
+                for c in ctx['cands']:
+                    if c['name'].lower() in seen or not healing.fits(c, slot):
+                        continue
+                    seen.add(c['name'].lower())
+                    try:
+                        v = healing.evaluate(kind, dict(best, **{slot: c}), base, spell)[0]
+                    except Exception:
+                        v = 0
+                    scored.append((-(v if isinstance(v, (int, float)) else 0), c['name']))
+                choices = [n for _v, n in sorted(scored)][:40]
+                cur = best[slot]['name'] if best.get(slot) else ''
+                if cur and cur not in choices:
+                    choices = [cur] + choices
+                if choices:
+                    self.heal_grid_best.pick(slot, ([] if cur else [PICK_ONE]) + choices, cur or PICK_ONE, self._heal_picked)
+
+    def _heal_picked(self, slot, name):
+        """He picked an item from a slot's dropdown: the set is judged again with it, and Put it in / Save it as use it."""
+        ctx = getattr(self, '_heal_pick_ctx', None)
+        if name == PICK_ONE or not ctx or not self.heal_result:
+            return
+        c = next((c for c in ctx['cands'] if c['name'].lower() == name.lower() and healing.fits(c, slot)), None)
+        if c is None:
+            return
+        rec, cur, kind, base, spell, keep = ctx['rec'], ctx['cur'], ctx['rec']['kind'], ctx['base'], ctx['spell'], ctx['keep']
+        best = ctx['best']
+        best[slot] = c
+        for other in {'ear1': 'ear2', 'ear2': 'ear1', 'ring1': 'ring2', 'ring2': 'ring1'}.get(slot, '').split() or []:
+            have = sum(n for k, n in ctx['counts'].items() if k.lower() == c['name'].lower()) or 1
+            if have < 2 and best.get(other) and best[other]['name'] == c['name'] and best[other].get('augments') == c.get('augments'):
+                if self.heal_grid_best.picks.get(other):
+                    self.heal_grid_best.picks[other].set(PICK_ONE)
+                best.pop(other)
+        v0, _t0 = healing.evaluate(kind, cur, base, spell)
+        v1, t1 = healing.evaluate(kind, best, base, spell)
+        ch = healing.changes(cur, best, keep)
+        names = {s: c['name'] for s, c in best.items()}
+        self.heal_grid_now.show({s: c['name'] for s, c in cur.items()}, {s: '#fbe3c4' for s in ch})
+        self.heal_grid_best.show(names, {s: '#c8efc0' for s in ch if s in names}, keep_picks=True)
+        self.heal_best_text.config(text='\n'.join(healing.describe(kind, t1, base, v1, spell)))
+        label = spell or healing.KINDS[kind]['title']
+        self.heal_head.config(text=f'{label}:  ' + (f'with your picks {healing.fmt_value(kind, v1)}' if rec['new'] else
+                                                    f'your set {healing.fmt_value(kind, v0)}   ->   with your picks {healing.fmt_value(kind, v1)}'))
+        short = healing.shortfall(t1, ctx['need'])
+        self.heal_status.config(text=(f"⚠ With your picks it misses part 3 by {short} in all." if short else ctx['words']))
+        self.heal_result = {'rec': rec, 'changes': ch, 'gear': {s: healing.gs_name(c) for s, c in best.items()
+                                                                if not (keep and s in ('main', 'sub'))}}
+        self.heal_put_btn.config(state='normal' if (ch or rec['new']) and self.heal_result['gear'] else 'disabled')
         self.heal_new_btn.config(state='normal' if self.heal_result['gear'] and not rec['new'] else 'disabled')
 
     def _heal_after_apply(self):
