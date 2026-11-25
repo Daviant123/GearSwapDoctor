@@ -771,6 +771,7 @@ _TEXT_STATS = [
 ]
 _CUT = re.compile(r'\b(Pet:|Avatar:|Wyvern:|Automaton:|Latent effect|Aftermath|Unity Ranking|Set:|Dynamis|Daytime|Nighttime|In Assault|'
                   r'Reives|Campaign|Besieged|Odyssey|Sortie|Weather|Additional effect|vs\.|Enhances|Occasionally|Converts|Adds|Ignores)', re.I)
+_PET = re.compile(r'(Pet|Avatar|Wyvern|Automaton):', re.I)
 _GAME = None
 
 
@@ -807,8 +808,13 @@ def _game_items():
 def text_stats(text, skill=None):
     """wsdist stats from an item's text ("DMG:148 Delay:288 STR+6 ... Axe skill +242 ... Pet: Accuracy+10" -> STR 6, Axe Skill 242 ...)."""
     out = {}
+    pet = False
     for line in (text or '').split('\n'):
+        if pet:
+            continue                                   # (a pet's stats go on after "Avatar:": Grioavolr's "Magic Atk. Bonus"+115 is the avatar's)
         cut = _CUT.search(line)
+        if cut and _PET.match(cut.group(1)):
+            pet = True
         line = line[:cut.start()] if cut else line
         for m in re.finditer(r'([A-Z][A-Za-z\- ]+?) skill ?\+(\d+)', line):
             k = m.group(1).strip() + ' Skill'
