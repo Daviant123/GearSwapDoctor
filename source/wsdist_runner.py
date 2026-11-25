@@ -178,6 +178,12 @@ def pick_variant(entries, augments=None):
     """_pick_variant, plus the stats of the copy's own augments when wsdist's entry is the plain item (2026-11-22, his request: "is gearswap
     doctor able to see the rank and effects of augmented gear"). Herculean Boots with 'Weapon skill damage +3%', 'STR+7' gets them."""
     e = _pick_variant(entries, augments)
+    own = [a for a in (augments or ()) if not str(a).lower().startswith(('rank:', 'path:'))]
+    if own and e.get('Name2') != e.get('Name') and 'Rank' not in e and not any(x['Name2'] == x['Name'] for x in entries):
+        # wsdist lists only made-up augment versions of it (Merlinic Jubbah "(Occult Acumen)"): his real augments on the game's item instead
+        base = game_armor(e['Name']) or game_weapon(e['Name'])
+        if base:
+            e = base
     if augments and e.get('Name2') == e.get('Name'):
         extra = augment_stats(augments)
         if extra:
@@ -200,7 +206,8 @@ _AUG_WORDS = [('Rng.Acc.', 'Ranged Accuracy'), ('Rng. Acc.', 'Ranged Accuracy'),
               ('"Triple Atk."', '"Triple Attack"'), ('Crit.hit rate', 'Critical hit rate'), ('Crit. hit rate', 'Critical hit rate'),
               ('Crit.hit damage', 'Critical hit damage'), ('Crit. hit damage', 'Critical hit damage'), ('Phys. dmg. taken', 'Physical damage taken'),
               ('Magic dmg. taken', 'Magic damage taken'), ('Mag. dmg. taken', 'Magic damage taken'), ('"Mag. Dmg."', 'Magic Damage'),
-              ('Mag. Dmg.', 'Magic Damage'), ('"Dual Wield"', '"Dual Wield"'), ('"Subtle Blow"', '"Subtle Blow"')]
+              ('Mag. Dmg.', 'Magic Damage'), ('Magic burst dmg.', 'Magic burst damage'), ('Mag. burst dmg.', 'Magic burst damage'),
+              ('Magic Damage taken', 'Magic damage taken'), ('Mag. Evasion', 'Magic Evasion'), ('Elem. magic skill', 'Elemental magic skill'), ('"Dual Wield"', '"Dual Wield"'), ('"Subtle Blow"', '"Subtle Blow"')]
 
 
 def augment_stats(augments):
@@ -723,7 +730,9 @@ def ws_skill(ws):
 
 def entries_for(name, items, index):
     """wsdist entries for a GearSwap item name, through the game's short and long names. A weapon wsdist doesn't list (an Arasy Tabar,
-    2026-11-21: the axe was missing from Build a set) is built from the game's own data instead - game_weapon()."""
+    2026-11-21: the axe was missing from Build a set) is built from the game's own data instead - game_weapon(); armour too (Merlinic,
+    Chironic, Telchine ..., his request 2026-11-25: "the doctor should always read augmented gear") - game_armor(). Their augments are
+    added by pick_variant like any plain item's."""
     out = index.get(name.lower())
     if out:
         return out
@@ -731,7 +740,7 @@ def entries_for(name, items, index):
         for n in (it['en'].lower(), it['enl'].lower()):
             if n in index:
                 return index[n]
-    e = game_weapon(name)
+    e = game_weapon(name) or (_has_augs(name, items) and game_armor(name))
     if e:
         index[name.lower()] = [e]          # (kept: the same entry everywhere after this)
         return index[name.lower()]
@@ -753,7 +762,11 @@ _TEXT_STATS = [
     (r'"Triple Attack"([+-]\d+)', 'TA'), (r'"Dual Wield"([+-]\d+)', 'Dual Wield'), (r'"Subtle Blow"([+-]\d+)', 'Subtle Blow'),
     (r'Critical hit rate ?([+-]\d+)', 'Crit Rate'), (r'Critical hit damage ?([+-]\d+)', 'Crit Damage'),
     (r'Weapon skill damage ?([+-]\d+)', 'Weapon Skill Damage'), (r'Haste([+-]\d+)', 'Gear Haste'), (r'"Regain"([+-]\d+)', 'Regain'),
-    (r'Damage taken ?([+-]\d+)', 'DT'), (r'Physical damage taken ?([+-]\d+)', 'PDT'), (r'Magic damage taken ?([+-]\d+)', 'MDT'),
+    (r'(?<![A-Za-z] )(?i:damage taken) ?([+-]\d+)', 'DT'), (r'(?i:physical damage taken) ?([+-]\d+)', 'PDT'),
+    (r'(?i:magic damage taken) ?([+-]\d+)', 'MDT'),
+    (r'(?i:magic burst damage) ?\+(\d+)(?! *II)', 'Magic Burst Damage'), (r'(?i:magic burst damage II) ?\+(\d+)', 'Magic Burst Damage II'),
+    (r'(?i:elemental magic skill) ?\+(\d+)', 'Elemental Magic Skill'), (r'(?<!Magic )Evasion([+-]\d+)', 'Evasion'),
+    (r'Magic Evasion([+-]\d+)', 'Magic Evasion'),
     (r'Magic Accuracy skill ?\+(\d+)', 'Magic Accuracy Skill'),
 ]
 _CUT = re.compile(r'\b(Pet:|Avatar:|Wyvern:|Automaton:|Latent effect|Aftermath|Unity Ranking|Set:|Dynamis|Daytime|Nighttime|In Assault|'
@@ -774,7 +787,8 @@ def _game_items():
                 if m:
                     text[int(m.group(1))] = m.group(2).replace('\\n', '\n').replace('\\"', '"')
             for line in open(os.path.join(res, 'items.lua'), encoding='utf-8', errors='replace'):
-                if 'category="Weapon"' not in line or 'skill=' not in line or 'damage=' not in line:
+                weapon = 'category="Weapon"' in line and 'skill=' in line and 'damage=' in line
+                if not weapon and 'category="Armor"' not in line:
                     continue
                 m = re.match(r'\s*\[(\d+)\] = \{id=\d+,en="([^"]*)"', line)
                 if not m:
@@ -798,7 +812,7 @@ def text_stats(text, skill=None):
         line = line[:cut.start()] if cut else line
         for m in re.finditer(r'([A-Z][A-Za-z\- ]+?) skill ?\+(\d+)', line):
             k = m.group(1).strip() + ' Skill'
-            if k.lower() != 'magic accuracy skill':
+            if k.lower() != 'magic accuracy skill' and not k.lower().endswith('magic skill'):     # (Elemental magic skill: _TEXT_STATS)
                 out[k] = out.get(k, 0) + int(m.group(2))
         for rx, key in _TEXT_STATS:
             for m in re.finditer(rx, line):
@@ -818,6 +832,37 @@ def game_weapon(name):
         return None
     e = {'Name': en, 'Name2': en, 'Type': 'Weapon', 'Skill Type': skill, 'DMG': f['damage'], 'Delay': f.get('delay', 0),
          'Jobs': [j for i, j in enumerate(JOB_BITS) if f.get('jobs', 0) & (1 << (i + 1))], 'GSD from game data': True}
+    for k, v in text_stats(text).items():
+        e[k] = e.get(k, 0) + v
+    return e
+
+
+# armour slots (items.lua slot bits): head to feet, neck, waist, ears, rings, back - not sub / range / ammo (a shield, grip, instrument or
+# ammo has wsdist rules of its own: its "Type")
+_ARMOR_BITS = (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+
+
+def _has_augs(name, items):
+    """Steward saw augments on his copy (an augmented piece is worth reading; plain old armour wsdist doesn't list isn't - it only slowed
+    every build down, 4 times over)."""
+    import checks
+    for it in items.find(name):
+        if it['en'].lower() == (name or '').lower() and any(any(not str(x).lower().startswith(('rank:', 'path:')) for x in (c or ()))
+                                                           for c in (checks.LAST_AUGS.get(it['id']) or ())):
+            return True
+    return False
+
+
+def game_armor(name):
+    """A wsdist entry for armour wsdist doesn't list (Merlinic, Chironic, Telchine, older pieces), from the game's own data: the jobs and
+    the stats in its text. Missing like game_weapon: what the text says only sometimes (latents, set bonuses, Pet:)."""
+    rec = _game_items().get((name or '').lower())
+    if not rec:
+        return None
+    en, f, text = rec
+    if f.get('damage') or f.get('skill') or not any(f.get('slots', 0) & (1 << b) for b in _ARMOR_BITS) or f.get('slots', 0) & 0b1111:
+        return None
+    e = {'Name': en, 'Name2': en, 'Jobs': [j for i, j in enumerate(JOB_BITS) if f.get('jobs', 0) & (1 << (i + 1))], 'GSD from game data': True}
     for k, v in text_stats(text).items():
         e[k] = e.get(k, 0) + v
     return e

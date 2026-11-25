@@ -63,7 +63,7 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.40.4'
+VERSION = '2.41.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
@@ -2332,16 +2332,22 @@ class App(tk.Tk):
         ToolTip(self.nx_write_btn, 'Writes the weapon skill set and the fighting set built from your own gear into the file: shows every change, '
                                    'asks first, backup first. Weapons stay as they are.')
 
-        # 4. cures and pets
+        # 4. healing, enhancing, enfeebling, nuking, pets (his request 2026-11-25: "also add for nuking, enfeebling, healing, enhancing")
         p4 = ttk.Frame(nb, padding=6)
-        nb.add(p4, text='4. Cures and pets')
+        nb.add(p4, text='4. Magic and pets')
         b4 = ttk.Frame(p4)
         b4.pack(fill='x')
-        self.nx_heal_btn = ttk.Button(b4, text='Look at the cure and pet sets', style='Big.TButton', command=self.nx_heal)
-        self.nx_heal_btn.pack(side='left')
-        ToolTip(self.nx_heal_btn, "wsdist knows no cures or pets, so these use the Doctor's own judges: cures by the game's formulas (HP healed), the wyvern's "
-                                  "breath by BG Wiki's formula (% breath damage, about), automaton, avatar, jug pet and luopan sets by the researched weights "
-                                  "(points). Each set: now, the best from your gear, and the pieces you don't have that add the most.")
+        ttk.Label(b4, text='Sets for').pack(side='left')
+        self.nx_kind = SearchCombo(b4, values=list(next_up.KINDS), state='readonly', width=12)
+        self.nx_kind.set('Healing')
+        self.nx_kind.pack(side='left', padx=4)
+        self.nx_heal_btn = ttk.Button(b4, text='Look at these sets', style='Big.TButton', command=self.nx_heal)
+        self.nx_heal_btn.pack(side='left', padx=(4, 0))
+        ToolTip(self.nx_heal_btn, "Nuking: wsdist's spell maths (damage of one cast; it takes a minute a set: it also builds the best set from every item in "
+                                  "the game). Healing, enhancing, enfeebling and pets use the Doctor's own judges: cures by the game's formulas (HP healed), "
+                                  "enhancing and enfeebling by the researched weights (skill, duration, magic accuracy ... in points), the wyvern's breath by "
+                                  "BG Wiki's formula, automaton, avatar, jug pet and luopan sets by the researched weights (points). Each set: now, the best "
+                                  "from your gear, and the pieces you don't have that add the most.")
         ttk.Label(b4, text='Double-click an item: its BG Wiki page.', foreground='#777').pack(side='left', padx=10)
         self.nx_hl = self._nx_tree(p4, (('#0', 'Set / item', 330), ('now', 'Now', 120), ('best', 'Best from your gear', 150), ('unit', 'In', 120),
                                         ('more', 'Adds', 90), ('from', 'Where it comes from', 330)))
@@ -2630,7 +2636,8 @@ class App(tk.Tk):
             self.nx_load()
 
     def nx_heal(self):
-        """The cure and pet sets of the file: now, the best from his gear, and what to get (gear_opt's judges)."""
+        """The healing / enhancing / enfeebling / nuking / pet sets of the file: now, the best from his gear, and what to get (gear_opt's judges;
+        nukes: wsdist's spell maths, next_up.nuke_path)."""
         import gear_opt
         if self.nx_ld is None:
             self.nx_status.config(text='Pick a GearSwap file first.')
@@ -2644,19 +2651,34 @@ class App(tk.Tk):
         items, data = self.items, self._heal_data
         who = self.who.get()
 
+        kind = self.nx_kind.get() or 'Healing'
+        enemy, buffs = self.cfg.get('enemy', 'Apex Toad'), W.buff_spec(self.cfg.get('buffs', 'party'), self.cfg.get('buffs_custom'), 'auto')
+
         def work():
             bags = checks.load_bags(who) or {}
             cands, counts = doctor._owned_cands(ld, job, bags, items, checks.load_augments(who))
             ctx = gear_opt.Ctx(ld, job, sub, cands, counts, items, data)
-            every = job_sets.all_candidates(job, items, data)
-            rows = [r for r in gear_opt.classify(ld, job) if next_up.is_care(r)]
+            every = None
+            rows = [r for r in gear_opt.classify(ld, job) if next_up.kind_of(r, job) == kind]
             out = []
+            ids = None
             for i, r in enumerate(rows):
                 if self._nx_stopping:
                     break
                 self._nx_say(f"{i + 1} / {len(rows)}: {r['path'][5:]}")
                 try:
-                    res, ideas = next_up.set_path(r, ctx, every)
+                    if r.get('judge') == 'wsdist':
+                        if ids is None:
+                            ids = next_up.owned(who)[0]
+                        n = next_up.nuke_path(r, job, sub, ld, ids, items, W.gear_index(), enemy=enemy, buffs=buffs,
+                                              stop=lambda: self._nx_stopping)
+                        res = {'now': n['now'], 'val': n['own'], 'focus': n['spell'], 'unit': 'damage a cast',
+                               'all': n['all']}
+                        ideas = n['ideas']
+                    else:
+                        if every is None:
+                            every = job_sets.all_candidates(job, items, data)
+                        res, ideas = next_up.set_path(r, ctx, every)
                 except Exception as e:
                     out.append((r, None, [], str(e)))
                     continue
@@ -2671,7 +2693,7 @@ class App(tk.Tk):
                 if err or not res:
                     t.insert('', 'end', text=r['path'][5:], values=('', '', '', '', err or 'not judged'))
                     continue
-                u = next_up.unit(r, res)
+                u = res.get('unit') or next_up.unit(r, res)
                 row = t.insert('', 'end', text=f"{r['path'][5:]}  ({res.get('focus') or r.get('focus')})",
                                values=(f"{res['now']:,.1f}", f"{res['val']:,.1f}", u, '', ''), open=bool(ideas))
                 for slot, name, more in ideas:
@@ -2680,10 +2702,10 @@ class App(tk.Tk):
                     c = t.insert(row, 'end', text=f'      {slot}: {name}', values=('', '', '', f'+{more:,.1f}', how))
                     self.nx_wiki[c] = wiki
             if not out:
-                self.nx_status.config(text='This file has no cure or pet sets the Doctor judges.')
+                self.nx_status.config(text=f'This file has no {kind.lower()} sets the Doctor judges.')
             else:
-                self.nx_status.config(text=f'{len(out)} cure / pet sets. "Now" and "Best" in the unit shown; under each: what to get.')
-        self._nx_run('Judging the cure and pet sets', work, done)
+                self.nx_status.config(text=f'{len(out)} {kind.lower()} sets. "Now" and "Best" in the unit shown; under each: what to get.')
+        self._nx_run(f'Judging the {kind.lower()} sets', work, done)
 
     def opt_load(self, keep_sub=False):
         """The file's sets, what each is for, who judges it (nothing built yet: that's "Look at every set")."""
