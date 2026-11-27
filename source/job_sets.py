@@ -234,9 +234,11 @@ FOCUS = {
     'Enmity': {'pts': {'enmity': 5, 'phys': 1.5, 'magic': 1.5, 'HP': 0.02, 'sird': 0.3}, 'show': ['enmity', 'phys', 'magic'],
                'how': 'Enmity +, then damage taken (you hold hate, so you are hit).'},
     # songs (BG Wiki: All songs +n raises every song; duration %; dummy songs must be short so a real song never gets knocked off - RESEARCH.md "Bard songs")
-    'Songs: buff': {'pts': {'songs': 40, 'song_one': 40, 'song_dur': 6, 'sing': 0.3, 'instr': 0.3, 'CHR': 0.2, 'phys': 0.2, 'magic': 0.2},
-                    'show': ['songs', 'song_one', 'song_dur'],
-                    'how': 'All songs +n and the song\'s own +n first (each step makes it stronger), then song duration. Instruments (range slot) aren\'t changed here.'},
+    # (Singing + instrument skill only counts up to the song's skill cap: song_skill_cap; past it, and for Ballad, it does nothing)
+    'Songs: buff': {'pts': {'songs': 40, 'song_one': 40, 'song_dur': 6, 'song_skill_use': 0.3, 'CHR': 0.2, 'phys': 0.2, 'magic': 0.2},
+                    'show': ['songs', 'song_one', 'song_dur', 'song_skill'],
+                    'how': 'All songs +n and the song\'s own +n first (each step makes it stronger), then song duration; Singing + instrument skill only '
+                           'up to the song\'s cap (about 900 together). The instrument and the ammo slot are never changed.'},
     'Songs: enfeeble': {'pts': {'macc': 2, 'CHR': 1.2, 'sing': 1, 'instr': 0.8, 'songs': 8, 'song_one': 8, 'song_dur': 3}, 'show': ['macc', 'CHR', 'sing'],
                         'how': 'Lullaby, Elegy, Threnody, Finale: magic accuracy, CHR and Singing / instrument skill; All songs +n makes Lullaby last longer.'},
     'Songs: dummy': {'pts': {'fast': 2, 'song_fast': 2, 'phys': 1, 'magic': 1, 'song_dur': -10, 'songs': -2}, 'show': ['song_dur', 'phys'],
@@ -757,6 +759,33 @@ def flurry_of(path):
     return 15 if 'flurry' in low else 0
 
 
+# Bard songs and skill (BG Wiki song pages, read 2026-11-27 - RESEARCH.md "Bard song skill caps"): a buff song's potency grows with Singing +
+# instrument skill together until the song's cap, then only "All songs +" and the song's own +n raise it (+10 % of the base a step for
+# Minuet / Minne / March / Mambo / Madrigal / Prelude). Skill never changes duration. A Bard at 99 has 373 Singing and 373 Wind / String
+# (master levels and job point gifts add more: not counted, as pld.ENH_SKILL), so gear skill is worth something only up to the cap.
+SONG_SKILL_BASE = 373 + 373
+SONG_SKILL_CAPS = {'Ballad': None,        # "Skill has no bearing on potency"
+                   'Paeon': 778,          # "Skill cap is 434~778"
+                   'Minuet': 900, 'Madrigal': 900, 'Minne': 900, 'Prelude': 900, 'Mambo': 900,   # "Skill cap is < 900"
+                   'Carol': 900, 'Etude': 900, 'March': 900}   # (Carol ">=900", Etude ">=475", Victory March ">600": 900 taken)
+SONG_SKILL_CAP = 900                      # (a set for every song: BardSong / SongEnhancing)
+
+
+def song_of(path, focus=None):
+    """'Minuet' for sets.midcast.Minuet (a buff song set), else None."""
+    if (focus or focus_for(path, 'BRD')) != 'Songs: buff':
+        return None
+    for x in SONG_BUFF:
+        if x in path.lower() and x not in ('songenhancing', 'bardsong', 'honormarch'):
+            return x.capitalize()
+    return None
+
+
+def song_skill_cap(song):
+    """The combined skill a song stops growing at; None when skill doesn't change it."""
+    return SONG_SKILL_CAPS.get(song, SONG_SKILL_CAP) if song else SONG_SKILL_CAP
+
+
 def ctx_for(job, sub, ability=None, song=None, spell=None):
     return {'job': (job or '').upper(), 'sub': (sub or '').upper(), 'ability': ability, 'song': song, 'spell': spell}
 
@@ -790,6 +819,11 @@ def numbers(gear, focus, ctx=None):
         n['ja'] = n['jan'] = 0
     song = ctx.get('song')
     n['song_one'] = sum(boosts(c, song) for c in gear.values() if c) if song else 0
+    if focus == 'Songs: buff':
+        cap = song_skill_cap(song)
+        n['song_skill'] = SONG_SKILL_BASE + t.get('sing', 0) + t.get('instr', 0)
+        n['song_skill_cap'] = cap
+        n['song_skill_use'] = 0 if cap is None else max(0, min(n['song_skill'], cap) - SONG_SKILL_BASE)
     n['ability'] = a
     n['hp'] = sum(pld.hp_of(c) for c in gear.values() if c)
     n['ds_absorb'] = round((pld.BASE_HP + n['hp']) * 0.5 * (1 + t.get('ds_pot', 0) / 100))
@@ -862,7 +896,7 @@ def main_value(gear, focus):
         focus, ctx = focus
     f = FOCUS.get(focus) or FOCUS['Ability']
     c = capped(numbers(gear, focus, ctx), focus)
-    keys = set(f['show']) | ({'jan'} if 'ja' in f['show'] else set()) | ({'song_one'} if 'songs' in f['show'] else set())
+    keys = set(f['show']) | ({'jan'} if 'ja' in f['show'] else set()) | ({'song_one'} if 'songs' in f['show'] else set()) |         ({'song_skill_use'} if 'song_skill' in f['show'] else set())
     if 'phys' in keys:
         keys.add('magic')
     pts, extra = _pts(f, c)
@@ -889,6 +923,11 @@ def words(n, focus=None):
         if k == 'song_one':
             if v:
                 out.append(f"the song's own +{v}")
+            continue
+        if k == 'song_skill':
+            cap = n.get('song_skill_cap')
+            out.append(f"Singing + instrument skill {v} (skill doesn't change this song)" if cap is None else
+                       f"Singing + instrument skill {v} of {cap}")
             continue
         lab = LABEL.get(k, k)
         if k in ('phys', 'magic'):
@@ -942,6 +981,9 @@ def advice(n, focus):
         tips.append(f"Snapshot {n['snap']} %: past {cap_} % from gear does nothing" + (" with Flurry up: the rest could be Rapid Shot" if n.get('flurry') else ''))
     if f == 'Blood Pact delay' and (n.get('bp1', 0) > 15 or n.get('bp2', 0) > 15):
         tips.append('Blood Pact delay past -15 (each kind) does nothing')
+    if f == 'Songs: buff' and n.get('song_skill_cap') and n.get('song_skill', 0) > n['song_skill_cap']:
+        tips.append(f"Singing + instrument skill {n['song_skill']}: {n['song_skill'] - n['song_skill_cap']} past the song's cap of "
+                    f"{n['song_skill_cap']} does nothing - those slots could carry All songs + or song duration")
     if f == 'Songs: dummy' and n.get('song_dur', 0):
         tips.append(f"song duration +{n['song_dur']} %: a dummy song should be short, so a new song overwrites it and not a real one")
     if fz.get('pts', {}).get('ja') and n.get('ability') and not n.get('ja'):
@@ -986,12 +1028,7 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     job, sub = (job or '').upper(), (sub or '').upper()
     focus = focus or focus_for(path, job) or 'Ability'
     ab = ability_of(path)
-    song = None
-    if focus == 'Songs: buff':
-        for x in SONG_BUFF:
-            if x in path.lower() and x not in ('songenhancing', 'bardsong', 'honormarch'):
-                song = x.capitalize()
-                break
+    song = song_of(path, focus)
     ctx = ctx_for(job, sub, ab if (ab and focus in ('Ability', 'Phantom Roll', 'Steps', 'Violent Flourish', 'Jump', 'Charm', 'Sneak Attack', 'Trick Attack',
                                                       'Quick Draw: damage', 'Quick Draw: accuracy')) else None, song)
     if focus == 'Phantom Roll' and ab == 'Phantom Roll':

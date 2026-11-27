@@ -8,11 +8,14 @@ Floestone and Oshasha's Treatise. Those put in the ammo slot take the gun off. S
   any job    a set (or the file) that puts something in the range slot, like a BRD's instrument
   PUP        always (his report 2026-11-22: "the melee set is still using ammo slot instead of animator"): ammo in a set takes the animator off;
              BG Wiki's PUP sets never pair ammo with one. The Doctor never adds or changes a PUP's ammo (Repair's oil is his own to set).
+  BRD        always (his report 2026-11-27: "it constantly removes the instrument in different sets so that the casting can't happen"):
+             an instrument sits in the range slot, so any ammo takes it off (Impatiens / Staunch Tathlum in his fast cast and song sets).
+             The Doctor never adds or changes a BRD's ammo, and the check-up flags ammo already in a BRD set (fix: ammo="empty").
 Not a GEO's set with no bell in it: those use stat ammo on purpose.
 Which ammo is which comes from the game's own data (res\\items.lua ammo_type).
 """
 RANGED_JOBS = ('COR', 'RNG')
-KEEPS_RANGE = RANGED_JOBS + ('PUP',)        # (no new ammo for these: it takes off what they keep in the range slot)
+KEEPS_RANGE = RANGED_JOBS + ('PUP', 'BRD')        # (no new ammo for these: it takes off what they keep in the range slot)
 MATCHING = ('Bullet', 'Arrow', 'Bolt')
 RANGE_KEYS = ('range', 'ranged')
 
@@ -66,13 +69,20 @@ def best_bullet(loaded, items, owned_ids=None):
 def ammo_problems(loaded, items, job, owned_ids=None):
     """[{'item', 'sets', 'fix'}]: ammo that takes off what this job keeps in the range slot, by item."""
     out = {}
+    if (job or '').upper() == 'BRD':                  # (a Bard's instrument: any ammo takes it off; empty is the fix)
+        for s in loaded.sets:
+            for k, g in s['gear'].items():
+                if str(k).lower() == 'ammo' and g.get('name', '').lower() not in ('', 'empty', 'none'):
+                    p = out.setdefault(g['name'], {'item': g['name'], 'sets': [], 'fix': 'empty', 'what': 'instrument'})
+                    p['sets'].append(s['path'])
+        return list(out.values())
     if (job or '').upper() not in RANGED_JOBS:
         return []
     fix = best_bullet(loaded, items, owned_ids)
     for s in loaded.sets:
         for k, g in s['gear'].items():
             if str(k).lower() == 'ammo' and takes_gun_off(g['name'], items):
-                p = out.setdefault(g['name'], {'item': g['name'], 'sets': [], 'fix': fix})
+                p = out.setdefault(g['name'], {'item': g['name'], 'sets': [], 'fix': fix, 'what': 'gun'})
                 p['sets'].append(s['path'])
     return list(out.values())
 

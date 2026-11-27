@@ -669,7 +669,7 @@ def job_upgrades(loaded, job, sub, bags, items, targets=None, stats=None, only=N
             progress(f'job sets {i + 1} of {len(rows)}')
         target = (targets or {}).get(s['path']) or {}
         need = need_of(target, sird=True)
-        key = (job_sets.focus_for(s['path'], job), job_sets.ability_of(s['path']), real_results.spell_of(s['path']), tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in s['gear'].items())),
+        key = (job_sets.focus_for(s['path'], job), job_sets.ability_of(s['path']), real_results.spell_of(s['path']), job_sets.song_of(s['path'], job_sets.focus_for(s['path'], job)), tuple(sorted((k, g['name'], tuple(g.get('augments') or ())) for k, g in s['gear'].items())),
                tuple(sorted(need.items())))
         try:
             if key in done:
@@ -1160,8 +1160,10 @@ def checkup(character, files=None, wsdist=True, progress=None, sub='WAR', tp=150
             except Exception:
                 pass
         for p in job_rules.ammo_problems(loaded, items, job, owned_ids):
-            entry['problems'].append({'kind': 'ammo', 'item': p['item'], 'slot': 'ammo', 'sets': p['sets'], 'fix': p['fix'],
-                                      'detail': f"Not a bullet: it takes your gun off. Put back: {p['fix'] or 'a bullet'}"})
+            inst = p.get('what') == 'instrument'
+            entry['problems'].append({'kind': 'ammo', 'item': p['item'], 'slot': 'ammo', 'sets': p['sets'], 'fix': p['fix'], 'what': p.get('what', 'gun'),
+                                      'detail': "Ammo takes your instrument off, so songs can't use it. Fix: no ammo in this set" if inst else
+                                      f"Not a bullet: it takes your gun off. Put back: {p['fix'] or 'a bullet'}"})
         if index is not None and job and not loaded.error:
             js = sub.get(job, 'WAR') if isinstance(sub, dict) else sub
             tg = (targets or {}).get(os.path.basename(path)) or {}

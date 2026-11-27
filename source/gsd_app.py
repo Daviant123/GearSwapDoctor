@@ -63,12 +63,12 @@ import set_name  # noqa: E402
 import updater  # noqa: E402
 import wsdist_runner as W  # noqa: E402
 
-VERSION = '2.41.1'
+VERSION = '2.42.0'
 SETTINGS = paths.SETTINGS
 ICONS = os.path.join(paths.WSDIST, 'icons32')
 HOME = 'https://github.com/Daviant123/GearSwapDoctor'
 KIND_TEXT = {'broken': 'Broken', 'unknown': 'Misspelled', 'slot': 'Wrong slot', 'job': 'Wrong job',
-             'missing': 'Not owned', 'stored': 'In storage', 'ammo': 'Takes your gun off', 'setname': 'Set never used'}
+             'missing': 'Not owned', 'stored': 'In storage', 'ammo': 'Takes your gun / instrument off', 'setname': 'Set never used'}
 KIND_COLOR = {'broken': '#f4b4b4', 'unknown': '#f4b4b4', 'slot': '#f7d79a', 'job': '#f7d79a', 'missing': '#d9d9f7',
               'stored': '#d9e9f7', 'ammo': '#f4b4b4', 'setname': '#f4b4b4'}
 GRID = [['main', 'sub', 'range', 'ammo'], ['head', 'neck', 'ear1', 'ear2'], ['body', 'hands', 'ring1', 'ring2'],
@@ -95,6 +95,9 @@ KIND_HELP = {
                 'Tick it and click Apply ticked: the set gets its real name, everywhere the file names it (a backup is made first).'),
     'ammo': ("A COR or RNG with ammo that isn't a bullet or arrow loses the gun or bow every time that set goes on.",
              'Ammo that is not a bullet or arrow: your gun comes off when this set goes on. Tick it to put a bullet back.'),
+    'ammo_brd': ("A Bard's instrument is in the range slot: any ammo takes it off when that set goes on, so songs lose it (Honor March and "
+                 "Aria of Passion can't even be sung). The Doctor never puts ammo in a Bard's set.",
+                 'Ammo in a Bard set: your instrument comes off. Tick it to take the ammo off (ammo="empty").'),
     'broken': ("This set or file doesn't work. GearSwap stops reading the file there, or the set is used before it's made, "
                "so the gear in it is never worn.",
                "Open the file at the line shown in Details (or ask for help with it). This one can't be fixed with a click."),
@@ -930,7 +933,8 @@ class App(tk.Tk):
                     n_fix += 1
                 elif p['kind'] == 'ammo' and p.get('fix'):
                     key = ('a', f['path'], p['item'])
-                    row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}: takes your gun off", values=(p['fix'], len(p['sets'])))
+                    row = self.jt_fix.insert('', 'end', text=f"{self._box(key)} {p['item']}: takes your {p.get('what', 'gun')} off",
+                                             values=('no ammo' if p['fix'] == 'empty' else p['fix'], len(p['sets'])))
                     self.job_rowkey[('fix', row)] = (key, (f['path'], ('slots', p['sets'][0], {'ammo': p['fix']}, job_rules.AMMO_FIX)))
                     n_fix += 1
                 elif p['kind'] == 'missing':
@@ -1240,7 +1244,10 @@ class App(tk.Tk):
                         edits.setdefault(f['path'], []).extend(('slots', s, {'ammo': p['fix']}, job_rules.AMMO_FIX) for s in p['sets'])
                 self._apply(edits)
             n_sets = sum(len(p['sets']) for f, p in by['ammo'])
-            self._card('must', f"{n_sets} set(s) take your gun off", KIND_HELP['ammo'][0], [('Put bullets back', fix_ammo)])
+            if all(p.get('what') == 'instrument' for f, p in by['ammo']):
+                self._card('must', f"{n_sets} set(s) take your instrument off", KIND_HELP['ammo_brd'][0], [('Take the ammo off', fix_ammo)])
+            else:
+                self._card('must', f"{n_sets} set(s) take your gun off", KIND_HELP['ammo'][0], [('Put bullets back', fix_ammo)])
         order = [(f, f['hp_order']) for f in r['files'] if f.get('hp_order')]
         if order:
             def fix_order(found=order):
@@ -6246,7 +6253,7 @@ class App(tk.Tk):
                 if fixable:
                     self.rows[row] = (f['path'], tuple(p['edit']) if p.get('edit') else ('rename', p['item'], fix))
                 where = ', '.join(x for x in p['sets'] if x)
-                means, todo = KIND_HELP.get(p['kind'], ('', ''))
+                means, todo = KIND_HELP.get('ammo_brd' if p['kind'] == 'ammo' and p.get('what') == 'instrument' else p['kind'], ('', ''))
                 self.info[row] = (f"{LEVEL_TEXT[lv]} - {KIND_TEXT.get(p['kind'], p['kind'])}: {p['item']} {p['detail']}"
                                   + (('\nIn: ' + where) if where else '')
                                   + f'\nWhat it means: {means}\nWhat to do: {todo}'

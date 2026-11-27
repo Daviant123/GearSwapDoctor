@@ -750,6 +750,8 @@ def render(name, job, style, built, weapons, version, date, sub=None):
     head = HEAD.format(name=name, job=job, version=version, date=date, style='Mote-Include' if style == 'Mote' else 'no other files needed')
     # a gun's ammo for what shoots (nothing else in a COR's or RNG's ammo slot: job_rules)
     keep = next((w for w in weapons if w.get('range') and w.get('ammo')), None)
+    if (job or '').upper() == 'BRD':                       # (a Bard's instrument comes off with any ammo: job_rules)
+        built = {p: {k: v for k, v in g.items() if k != 'ammo'} for p, g in built.items()}
     if keep:
         for p in ('sets.precast.RA', 'sets.midcast.RA', 'sets.precast.CorsairShot'):
             if p in built:
