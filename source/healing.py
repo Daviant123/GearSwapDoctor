@@ -874,7 +874,7 @@ MAGE_JOBS = ('WHM', 'SCH', 'BLM', 'GEO', 'SMN', 'BRD')
 def hints(path, job):
     """What a set's name says about how to build it: sets.midcast.CureMelee keeps the weapons, .DT wants damage taken ..."""
     low = path.lower()
-    h = {'keep_weapons': 'melee' in low or job not in MAGE_JOBS, 'solace': job == 'WHM' and 'curaga' not in low, 'daywx': 0, 'need': {}}
+    h = {'keep_weapons': 'melee' in low or job not in MAGE_JOBS or job == 'BRD', 'solace': job == 'WHM' and 'curaga' not in low, 'daywx': 0, 'need': {}}
     if 'lightweather' in low:
         h['daywx'] = 10
     elif 'lightday' in low:

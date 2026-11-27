@@ -556,6 +556,23 @@ function G.pre(spell)
     return false
 end
 
+-- Bard: Honor March needs Marsyas and Aria of Passion needs Loughnashade from the start of the song; Carnwenhan for buff songs when not fighting
+local SONG_DEBUFF = { 'lullaby', 'elegy', 'threnody', 'requiem', 'finale', 'nocturne', 'virelai', 'foe ', 'horde ', 'magic finale', 'pining' }
+function G.song_gear(spell)
+    if not on('songs') or spell.type ~= 'BardSong' then return end
+    local c, n = cfg.songs, spell.english
+    if n == 'Honor March' and c.honor and c.honor ~= '' then
+        equip({ range = c.honor })
+    elseif n == 'Aria of Passion' and c.aria and c.aria ~= '' then
+        equip({ range = c.aria })
+    end
+    if c.weapon and c.weapon ~= '' and player and player.status ~= 'Engaged' and spell.target and spell.target.type ~= 'MONSTER' then
+        local l = low(n)
+        for _, d in ipairs(SONG_DEBUFF) do if l:find(d, 1, true) then return end end
+        equip({ main = c.weapon })
+    end
+end
+
 local COPY_IMAGE = 'cancel 66; cancel 444; cancel 445; cancel 446'
 function G.mid(spell)
     if not on('cancel') then return end
@@ -1413,10 +1430,10 @@ function G.install()
     if G.installed then return end
     G.installed = true
     G.th_mode = (on('th') and cfg.th.mode) or 'Off'
-    wrap('precast', G.pre, function(spell) G.heal_pre(spell) G.keep_tp(spell) G.moonshade(spell) G.obi(spell)
+    wrap('precast', G.pre, function(spell) G.heal_pre(spell) G.keep_tp(spell) G.moonshade(spell) G.obi(spell) G.song_gear(spell)
         if spell.action_type ~= 'Magic' and spell.action_type ~= 'Ranged Attack' then G.th_tag(spell) end
         G.overlay(true) end)
-    wrap('midcast', nil, function(spell) G.mid(spell) G.heal_mid(spell) G.keep_tp(spell)
+    wrap('midcast', nil, function(spell) G.mid(spell) G.heal_mid(spell) G.keep_tp(spell) G.song_gear(spell)
         if spell.action_type == 'Magic' then G.obi(spell) end
         if spell.action_type == 'Magic' or spell.action_type == 'Ranged Attack' then G.th_tag(spell) end
         G.overlay(true) end)

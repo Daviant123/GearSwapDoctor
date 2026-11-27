@@ -235,7 +235,10 @@ FOCUS = {
                'how': 'Enmity +, then damage taken (you hold hate, so you are hit).'},
     # songs (BG Wiki: All songs +n raises every song; duration %; dummy songs must be short so a real song never gets knocked off - RESEARCH.md "Bard songs")
     # (Singing + instrument skill only counts up to the song's skill cap: song_skill_cap; past it, and for Ballad, it does nothing)
-    'Songs: buff': {'pts': {'songs': 40, 'song_one': 40, 'song_dur': 6, 'song_skill_use': 0.3, 'CHR': 0.2, 'phys': 0.2, 'magic': 0.2},
+    # (BG Wiki "Obamiwannabuffya" Bard guide: "first maximize potency with Song+/All Song+ gear, then stack song duration in the other slots";
+    #  so +1 is worth about 16 % duration: Inyanga Shalwar +2's 17 % beats Fili Rhingrave's Ballad +1, Mousai Seraweels +1's Minne +2
+    #  beats it - both as the guide says. CHR and magic accuracy do nothing for a buff song.)
+    'Songs: buff': {'pts': {'songs': 95, 'song_one': 95, 'song_dur': 6, 'song_skill_use': 0.3, 'phys': 0.2, 'magic': 0.2},
                     'show': ['songs', 'song_one', 'song_dur', 'song_skill'],
                     'how': 'All songs +n and the song\'s own +n first (each step makes it stronger), then song duration; Singing + instrument skill only '
                            'up to the song\'s cap (about 900 together). The instrument and the ammo slot are never changed.'},
@@ -1064,7 +1067,8 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
         notes.append(f"not in your inventory or wardrobes, so GearSwap can't wear it: {', '.join(away)}")
     hk = FOCUS[focus].get('healing')
     import gs_create
-    keep_weapons = job not in gs_create.MAGES or focus in ONTOP or focus.startswith(('Phantom', 'Quick Draw', 'Ranged', 'Snapshot', 'Steps', 'Jump'))
+    # (a Bard keeps its weapons (his report 2026-11-27): Carnwenhan's song duration +50 % is lost when fast cast puts a staff on)
+    keep_weapons = job not in gs_create.MAGES or job == 'BRD' or focus in ONTOP or focus.startswith(('Phantom', 'Quick Draw', 'Ranged', 'Snapshot', 'Steps', 'Jump'))
     if keep is not None:                                   # (he picked the weapons the sets are made with: Gear Optimization)
         keep_weapons = keep
     if keep_weapons:

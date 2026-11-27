@@ -63,9 +63,15 @@ ROLE.update({
           'order': ['Cures', 'Enhancing', 'Casting fast', 'Staying alive', 'Job abilities', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
           'sources': 'BG Wiki Community White Mage Guide'},
     'BRD': {'title': 'Bard: songs for the party',
-          'text': 'A Bard\'s songs are its job: "All Songs +" (Gjallarhorn +4, Linos +3) and each song\'s own piece make them stronger, song duration pieces (Carnwenhan +50 %) make them last, a dummy song set is kept weak on purpose, Lullaby and other debuffs need magic accuracy and skill. Fast Cast with song casting time to 80 %. The instrument is never changed here: it decides how many songs you hold.',
+          'text': "A Bard's songs are its job. Song sets: potency first - \"All Songs +\" (Gjallarhorn +4, Mnbw. Whistle +1 +3, Linos) and the song's own piece "
+                  "(Fili Calot Madrigal, Fili Hongreline Minuet, Fili Manchettes March, Mousai pieces) - then song duration in every other slot (Carnwenhan +50 %, "
+                  "Marsyas +50 %, Inyanga Shalwar +2 17 %, Brioso Slippers 15 %, Fili Hongreline 14 %); +1 potency is worth about 16 % duration. Singing / "
+                  "instrument skill only matters up to each song's cap (about 900 together) and not at all for Ballad. Keep Carnwenhan in hand for songs "
+                  "(a fast cast staff takes its +50 % away), never put ammo on (it takes the instrument off), Honor March needs Marsyas and Aria of Passion "
+                  "Loughnashade from the start of the song. Fast Cast with song casting time to 80 %. A dummy song set is kept short on purpose; Lullaby and "
+                  "other debuffs need CHR, magic accuracy and skill (string skill sets Horde Lullaby's reach).",
           'order': ['Songs', 'Casting fast', 'Staying alive', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Nukes and blue magic damage', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
-          'sources': 'BG Wiki Community Bard Guide'},
+          'sources': 'BG Wiki "Obamiwannabuffya: A Bard Guide" (Funkworkz), FFXIAH "You Spoony Guide", FFXIAH "Military Parade" (DD Bard)'},
     'GEO': {'title': 'Geomancer: bubbles, and nukes',
           'text': "A Geomancer's bubbles are its job: Geomancy and Handbell skill (900 together is the usual goal), Indi duration, and gear that keeps the luopan alive (pet damage taken, pet Regen) while you stand idle. Then nukes and magic bursts (wsdist), Fast Cast to 80 %.",
           'order': ['Geomancy', 'Casting fast', 'Staying alive', 'Nukes and blue magic damage', 'Job abilities', 'Cures', 'Enhancing', 'Enfeebling', 'Dark magic', 'Weapon skills', 'Fighting (damage)', 'Holding hate', 'Spells', 'Pets', 'Standing (Refresh, town)', 'Healing tab', 'Weapons', 'Add-on sets'],
@@ -201,7 +207,8 @@ WHY.update({
     ('DNC', 'Violent Flourish'): 'Violent Flourish is a stun that lands on magic accuracy: Maculele pieces, Horos Casaque.',
     ('BLM', 'Drain and Aspir'): '"Drain" and "Aspir" potency (Spaekona\'s Tonban) and Dark magic skill.',
     ('RNG', 'Snapshot'): 'Snapshot first, to 70 % (60 % from gear with merits; Flurry II adds 30 %), then Rapid Shot.',
-    ('BRD', 'Songs: buff'): '"All Songs +" and the song\'s own piece make it stronger; song duration pieces make it last. The instrument stays.',
+    ('BRD', 'Songs: buff'): '"All Songs +" and the song\'s own piece first (one +1 is worth about 16 % duration), then song duration in every other slot; '
+                            'skill only up to the song\'s cap. The instrument, the weapons and the ammo slot stay.',
     ('BRD', 'Songs: dummy'): 'A dummy song is sung to be replaced: kept weak and short on purpose.',
     ('BRD', 'Songs: enfeeble'): 'Lullaby and the other debuffs: magic accuracy, Singing and instrument skill, CHR.',
     ('SMN', 'Blood Pact delay'): 'Blood Pact delay: 15 from "delay" gear and 15 from "delay II" gear are the caps.',

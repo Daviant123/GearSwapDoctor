@@ -57,7 +57,7 @@ RX = [(k, re.compile(rx)) for k, rx in [
     ('acc', r'(?<![a-z] )\bAccuracy ?\+(\d+)'), ('att', r'(?<![a-z] )\bAttack ?\+(\d+)'), ('racc', r'Ranged Accuracy ?\+(\d+)'), ('ratt', r'Ranged Attack ?\+(\d+)'), ('stp', r'"Store TP" ?\+(\d+)'),
     ('enh_skill', r'Enhancing magic skill ?\+(\d+)'), ('enh_dur', r'Enhancing magic (?:effect )?duration ?\+(\d+)'), ('enf_skill', r'Enfeebling magic skill ?\+(\d+)'), ('dark_skill', r'Dark magic skill ?\+(\d+)'),
     ('div_skill', r'Divine magic skill ?\+(\d+)'), ('ele_skill', r'Elemental magic skill ?\+(\d+)'), ('nin_skill', r'Ninjutsu skill ?\+(\d+)'), ('nin_dmg', r'Ninjutsu damage ?\+(\d+)'), ('blue_skill', r'Blue magic skill ?\+(\d+)'),
-    ('sing', r'Singing skill ?\+(\d+)'), ('instr', r'(?:String|Wind) instrument skill ?\+(\d+)'), ('songs', r'All songs ?\+(\d+)'), ('song_dur', r'Song effect duration ?\+(\d+)'), ('song_fast', r'Song spellcasting time ?-(\d+)'),
+    ('sing', r'Singing skill ?\+(\d+)'), ('instr', r'(?:String|Wind) instrument skill ?\+(\d+)'), ('songs', r'All songs ?\+(\d+)'), ('song_dur', r'Song (?:effect )?duration ?\+(\d+)'), ('song_fast', r'Song spellcasting time ?-(\d+)'),
     ('geo_skill', r'Geomancy skill ?\+(\d+)'), ('geomancy', r'\bGeomancy ?\+(\d+)'), ('bell', r'Handbell skill ?\+(\d+)'), ('indi_dur', r'"?Indicolure"? (?:spell |effect )?duration ?\+(\d+)'), ('smn_skill', r'Summoning magic skill ?\+(\d+)'),
     ('bp1', r'"Blood Pact" ability delay ?-(\d+)'), ('bp2', r'"Blood Pact" ability delay II ?-(\d+)'), ('perp', r'Avatar perpetuation cost ?-(\d+)'), ('th', r'"Treasure Hunter" ?\+(\d+)'), ('roll', r'"Phantom Roll" ?\+ ?(\d+)(?! *%)|(?<!")Phantom Roll ?\+(\d+)'),
     ('qd', r'"Quick Draw" ?\+(\d+)'), ('snap', r'"Snapshot" ?\+(\d+)'), ('rapid', r'"Rapid Shot" ?\+(\d+)'), ('trueshot', r'"True Shot" ?\+(\d+)'), ('recycle', r'"Recycle" ?\+(\d+)'), ('drain', r'"Drain" and "Aspir" potency ?\+(\d+)'),
@@ -105,7 +105,7 @@ POINTS = {
     # accuracy; breath damage is a share of your HP)
     'bluephys': {'STR': 1, 'DEX': 0.7, 'acc': 0.6, 'att': 0.4, 'blue_skill': 0.3},
     'bluebreath': {'HP': 1, 'macc': 0.1},
-    'songs': {'songs': 40, 'song_dur': 10, 'CHR': 0.5, 'sing': 0.5, 'instr': 0.5, 'macc': 0.5},
+    'songs': {'songs': 95, 'song_dur': 6, 'sing': 0.2, 'instr': 0.2},        # (potency first, then duration: job_sets 'Songs: buff')
     'songcast': {'song_fast': 6, 'fast': 5},
     'geomancy': {'geomancy': 30, 'geo_skill': 2, 'bell': 2, 'indi_dur': 2, 'conserve': 1},
     'summon': {'smn_skill': 2, 'perp': 10, 'bp1': 5, 'bp2': 5, 'MP': 0.02},

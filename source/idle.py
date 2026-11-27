@@ -125,7 +125,7 @@ def judge(path, set_gear, job, sub, cands, counts, items, data, need=None, focus
     base = {'mp': has_mp(job, sub), 'shell': shell}
     cur = healing.set_to_gear(set_gear, items, data, cands=cands)
     keys = {k.lower() for k in set_gear}
-    keep = keep_weapons if keep_weapons is not None else (job or '').upper() not in healing.MAGE_JOBS
+    keep = keep_weapons if keep_weapons is not None else ((job or '').upper() not in healing.MAGE_JOBS or (job or '').upper() == 'BRD')
     # (anything in the range slot stays, and an instrument or bell there leaves no room for ammo)
     no_ammo = job_rules.lock_ammo(job, set_gear) or bool({'range', 'ranged'} & keys)
     pool = [c for c in useful(cands) if not (no_ammo and healing.fits(c, 'ammo'))]

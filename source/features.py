@@ -321,6 +321,17 @@ FEATURES = [
               ('arts', 'bool', 'Put Light Arts up first when it is not', True, {}),
               ('chat', 'bool', 'Cast when someone asks in party chat ("sneak", "invis", "deo")', True, {})],
      'already': r'Accession'},
+    # (his request 2026-11-27 with three Bard guides: BG Wiki "Obamiwannabuffya" - Honor March "must be sung with Marsyas"; Aria of Passion
+    #  can't be sung without Loughnashade (his own report 2026-11-24); Carnwenhan's song duration +50 % only counts while it's in your hand)
+    {'key': 'songs', 'title': 'Bard: the right instrument for Honor March / Aria', 'group': 'Casting',
+     'what': 'Honor March can only be sung with Marsyas and Aria of Passion with Loughnashade, from the moment the song starts: they go on '
+             'when you start the song and stay on to the end, whatever your sets say. You can also have Carnwenhan (song duration +50 %) '
+             'put in your hand for buff songs while you are not fighting (fighting, your weapons and TP stay).',
+     'catalog': {'honor': ['Marsyas'], 'aria': ['Loughnashade'], 'weapon': ['Carnwenhan']},
+     'opts': [('honor', 'item', 'Honor March instrument', 'Marsyas', {'slot': 'range', 'pick': 'honor'}),
+              ('aria', 'item', 'Aria of Passion instrument', 'Loughnashade', {'slot': 'range', 'pick': 'aria'}),
+              ('weapon', 'item', 'Weapon for buff songs when not fighting (empty = none)', '', {'slot': 'main', 'pick': 'weapon'})],
+     'jobs': {'BRD'}, 'already': r'Honor March.*Marsyas|Marsyas.*Honor March'},
     {'key': 'box', 'title': 'Small window with the modes', 'group': 'Modes',
      'what': 'A small window that shows DT / Treasure Hunter / weapon lock / reraise as they change. Drag it where you '
              'want it; //gs c gsd box hides / shows it.',

@@ -183,7 +183,8 @@ function GS_WALK(env, slots)
         end
       end
     end
-    if next(gear) then out[#out + 1] = { path = path, gear = gear } end
+    -- (an empty weapon skill set is still a set to fill: his Brooke BRD file 2026-11-27, sets.precast.WS['Savage Blade'] = set_combine(sets.precast.WS, {}))
+    if next(gear) or path:match('%.WS[%.%[]') then out[#out + 1] = { path = path, gear = gear } end
     local keys = {}
     for k in pairs(t) do keys[#keys + 1] = k end
     table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)

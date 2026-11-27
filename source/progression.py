@@ -364,6 +364,38 @@ def _weapon_goal(job, its, have):
             'rows': rows, 'done': n, 'total': len(rows), 'summary': f'{n}/{len(rows)} owned'}
 
 
+# A Bard's instruments and song pieces, in the order BG Wiki's "Obamiwannabuffya: A Bard Guide" (Funkworkz) gives them (his request 2026-11-27).
+# (name, the ids that count as done, what it does for songs). Carnwenhan (+50 % duration) is in the Ultimate weapons goal.
+BRD_PIECES = [
+    ('Gjallarhorn', (18572, 18840), 'Gjallarhorn (level 99): All songs +4 - the main goal; "not many songs can reach +4 with other instruments"'),
+    ('Daurdabla', (18571, 18839), 'Daurdabla (level 99): two more songs at once (dummy songs) and Horde Lullaby II; Blurred Harp +1 / Terpander first'),
+    ('Marsyas', (21398,), 'Marsyas: Honor March can only be sung with it; song duration +50 %'),
+    ('Mnbw. Whistle +1', (26033,), 'Mnbw. Whistle +1 (neck): All songs +3 in every song set (Moonbow Whistle: +2)'),
+    ('Linos', (21404,), 'Linos: All songs +1 (+3 with its All songs +2 augment); also the melee / weapon skill instrument'),
+    ('Loughnashade', (22304, 22305, 22306, 22307), 'Loughnashade: Aria of Passion can only be sung with it'),
+]
+
+
+def _brd_goal(its, have):
+    rows = []
+    for name, done_ids, why in BRD_PIECES:
+        ids = [it['id'] for it in its if it['en'].lower() == name.lower()]
+        if not ids:
+            continue
+        got = any(i in have for i in done_ids)
+        lower = not got and any(i in have for i in ids + ([26032] if name == 'Mnbw. Whistle +1' else []))   # (Moonbow Whistle: the NQ)
+        row = {'slot': 'Bard', 'have': 0 if got else None, 'have_name': name if got else None, 'max': 0, 'names': [name]}
+        if not got:
+            row.update({'next': 0, 'next_name': name, 'where': 'Bard instrument / song piece',
+                        'how': why + ('. You have a lower version: upgrade it.' if lower else '') + ' BG Wiki has every step.', 'wiki': _wiki_page(name)})
+        rows.append(row)
+    if not rows:
+        return None
+    n = sum(1 for r in rows if r['have'] is not None)
+    return {'key': 'BRD|Instruments', 'title': 'Instruments and song pieces (Bard guide order)', 'rows': rows, 'done': n, 'total': len(rows),
+            'summary': f'{n}/{len(rows)} owned'}
+
+
 def goals(job, bags, sets=None, its=None):
     """Every gear goal of a job, with what he has and the next step of each piece.
     sets: the sets of his GearSwap file(s) for this job (gs_loader sets), to count where each piece is used."""
@@ -380,6 +412,8 @@ def goals(job, bags, sets=None, its=None):
     for label, prefix, nm in ODYSSEY:
         out.append(_odyssey_goal(job, its, have, label, prefix, nm))
     out.append(_weapon_goal(job, its, have))
+    if job == 'BRD':
+        out.append(_brd_goal(its, have))
     out = [g for g in out if g]
     used = used_counts(sets)
     for g in out:
