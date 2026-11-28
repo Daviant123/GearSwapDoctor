@@ -321,6 +321,26 @@ FEATURES = [
               ('arts', 'bool', 'Put Light Arts up first when it is not', True, {}),
               ('chat', 'bool', 'Cast when someone asks in party chat ("sneak", "invis", "deo")', True, {})],
      'already': r'Accession'},
+    # (his request 2026-11-28: "a feature ... similarly to the windower addon react. Where it can identify things happening and equip different
+    #  gear sets", like the auto-defense in his BLU file)
+    {'key': 'react', 'title': 'React to monster moves (auto-defense)', 'group': 'Safety',
+     'what': 'When a monster starts a TP move or a spell at you, the set for that kind of move goes on - physical, magic, both (breath), an '
+             'ailment (magic evasion), elemental - and comes off when the move lands or is stopped (or after the seconds you set). It knows '
+             'about 1,400 monster moves and spells. Never while you cast: it waits for your cast to end. Add your own: Move name = set, '
+             'comma separated (Tera Slash = sets.defense.MDT). Normal game commands only.',
+     'opts': [('who', 'choice', 'Which moves', 'Aimed at me', {'values': ['Aimed at me', 'Any monster nearby']}),
+              ('range', 'int', '"Nearby" means within (yalms)', 8, {'lo': 3, 'hi': 20, 'step': 1}),
+              ('set', 'set', 'Set for any move (your DT set)', '', {'like': r'dt|pdt|defense|damage'}),
+              ('physical', 'set', 'Physical moves', '', {'like': r'pdt|phys|defense'}),
+              ('magic', 'set', 'Magic moves', '', {'like': r'mdt|magic|defense'}),
+              ('hybrid', 'set', 'Both (breath, hybrid)', '', {'like': r'dt|hybrid|defense'}),
+              ('status', 'set', 'Moves that give an ailment (magic evasion)', '', {'like': r'meva|evasion|status|resist'}),
+              ('element', 'set', 'Elemental moves (resistance)', '', {'like': r'resist|element|mdt'}),
+              ('own', 'text', 'Your own: Move name = set, comma separated', '', {}),
+              ('seconds', 'int', 'Off again after at most (seconds)', 6, {'lo': 2, 'hi': 15, 'step': 1}),
+              ('engaged', 'bool', 'Only while you are fighting', False, {}),
+              ('say', 'bool', 'Say in the chat what it reacted to', False, {})],
+     'already': r"sets_against_actions|register_event\(\s*'action'\s*,\s*action_event"},
     # (his request 2026-11-27 with three Bard guides: BG Wiki "Obamiwannabuffya" - Honor March "must be sung with Marsyas"; Aria of Passion
     #  can't be sung without Loughnashade (his own report 2026-11-24); Carnwenhan's song duration +50 % only counts while it's in your hand)
     {'key': 'songs', 'title': 'Bard: the right instrument for Honor March / Aria', 'group': 'Casting',
